@@ -1,0 +1,26 @@
+[tool.poetry]
+name = "medical-chatbot-with-ca-kashif"
+version = "0.1.0"
+description = ""
+authors = ["Muhammad Haseeb <miltech.haseeb@gmail.com>"]
+readme = "README.md"
+packages = [{include = "medical_chatbot_with_ca_kashif"}]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+llama-index = "^0.10.33"
+python-dotenv = "^1.0.0"
+colorama = "^0.4.6"
+pyttsx4 = "^3.0.15"
+pydub = "^0.25.1"
+uvicorn = "^0.29.0"
+fastapi = "^0.110.0"
+openai = "^1.23.3"
+langchain = "^0.1.20"
+langchain-openai = "^0.1.7"
+langchainhub = "^0.1.15"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

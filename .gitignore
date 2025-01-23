@@ -1,0 +1,7 @@
+.idea
+.vscode
+.env
+history_log.json
+.DS_Store
+__pycache__
+/vnev
