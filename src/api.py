@@ -1,7 +1,9 @@
 import tempfile
 import os
 from fastapi import FastAPI, UploadFile, File, HTTPException,Form
-
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from io import BytesIO
 import boto3
 from fastapi.middleware.cors import CORSMiddleware
 import base64
@@ -20,17 +22,17 @@ os.environ["AWS_SECRET_ACCESS_KEY"] = os.getenv("AWS_SECRET_ACCESS_KEY")
 os.environ["AWS_REGION"] = os.getenv("AWS_REGION")
 
 # Verify if the variables are set correctly
-print("AWS_ACCESS_KEY_ID:", os.environ.get("AWS_ACCESS_KEY_ID"))
-print("AWS_SECRET_ACCESS_KEY:", os.environ.get("AWS_SECRET_ACCESS_KEY"))
-print("AWS_REGION:", os.environ.get("AWS_REGION"))
+# print("AWS_ACCESS_KEY_ID:", os.environ.get("AWS_ACCESS_KEY_ID"))
+# print("AWS_SECRET_ACCESS_KEY:", os.environ.get("AWS_SECRET_ACCESS_KEY"))
+# print("AWS_REGION:", os.environ.get("AWS_REGION"))
 
 
 # Ensure AWS_REGION is properly set
-print("AWS_REGION from os.environ:", os.environ.get("AWS_REGION"))
+# print("AWS_REGION from os.environ:", os.environ.get("AWS_REGION"))
 
 # Create a boto3 session to verify the region
 session = boto3.Session()
-print("Default region from boto3 session:", session.region_name)
+# print("Default region from boto3 session:", session.region_name)
 # Define allowed origins
 origins = [
     "http://localhost",
@@ -330,9 +332,95 @@ async def chat(
     raise HTTPException(status_code=400, detail="Either a message or an audio file must be provided.")
 
 
+# def image_to_base64(image_file: UploadFile) -> str:
+#     """
+#     Convert an uploaded image file to a base64-encoded string.
+#     """
+#     try:
+#         image = BytesIO(image_file.file.read())
+#         encoded_string = base64.b64encode(image.getvalue()).decode("utf-8")
+#         return f"data:{image_file.content_type};base64,{encoded_string}"
+#     except Exception as e:
+#         raise HTTPException(status_code=400, detail=f"Error converting the image: {e}")
+
+# @app.post("/analyze-image")
+# async def analyze_image(image: UploadFile = File(...)):
+#     try:
+#         base64_image = image_to_base64(image)
+
+#         response = client.chat.completions.create(
+#             model="gpt-4o", 
+#             messages=[
+#                 {
+#                     "role": "user",
+#                     "content": [
+#                         {"type": "text", "text": "This is a Image of a medical condition Your Job is to provide the medical speciality coresponding to the image along with relevent medical tags which should be comma seperated"},
+#                         {
+#                             "type": "image_url", 
+#                             "image_url": {
+#                                 "url": base64_image,  
+#                             }
+#                         },
+#                     ],
+#                 }
+#             ],
+#             max_tokens=300,
+#         )
+
+#         # description = response
+#         description = response.choices[0].message.content
+#         # await image.close()
+#         # Return the description from the response
+#         return JSONResponse(content={"status": "success", "description": description})
+#         # return description
+
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"Error processing the image: {str(e)}")
 
 
 
+class ImageRequest(BaseModel):
+    base64_image: str  # Expecting a base64-encoded image string
+
+@app.post("/analyze-image")
+async def analyze_image(request: ImageRequest):
+    try:
+        # Extract the base64 image from request
+        base64_image = request.base64_image
+
+        # Ensure it is a valid base64 string
+        try:
+            base64.b64decode(base64_image.split(",")[1])
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid base64 image format")
+
+        # Call OpenAI API
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "This is an image of a medical condition. Your job is to provide the corresponding medical specialty along with relevant medical tags, comma-separated."},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": base64_image,  
+                            }
+                        },
+                    ],
+                }
+            ],
+            max_tokens=300,
+        )
+
+        description = response.choices[0].message.content
+        print(description)
+        return {"status": "success", "description": description}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing the image: {str(e)}")
+    
 @app.get("/")
 def read_root():
     return {"response": "Hello World"}
