@@ -109,7 +109,7 @@ class DB:
                 "FROM [DrAide_Dev].[dbo].[LowerEntity] le "
                 "JOIN [DrAide_Dev].[dbo].[Branch] b ON le.BranchId = b.Id "
                 "LEFT JOIN [DrAide_Dev].[dbo].[Discount] d ON le.discount_id = d.discount_id "
-                "WHERE le.Specialty LIKE :speciality AND b.BranchName LIKE :location AND le.isActive = 1;"
+                "WHERE le.Specialty LIKE :speciality AND b.Address LIKE :location AND le.isActive = 1;"
             )
             result = cursor.execute(query, {'speciality': f"%{speciality.value}%", 'location': f"%{location}%"})
             records = [dict(row) for row in result.mappings()]
