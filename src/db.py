@@ -16,11 +16,15 @@ logger = logging.getLogger(__name__)
 
 # Define Speciality Enum
 class SpecialityEnum(str, Enum):
+    DERMATOLOGIST ="Dermatologist"
     DERMATOLOGY = "Dermatology"
+    
     DENTISTRY = "Dentistry"
     CARDIOLOGY = "Cardiology"
     ORTHOPEDICS = "Orthopedics"
     GENERALSURGERY = "General Surgery"
+    GENERALDENTIST = "General Dentist"
+    ORTHODONTIST = "Orthodontist"
 
 class DB:
     def __init__(self):
@@ -101,14 +105,18 @@ class DB:
             # "JOIN [DrAide_Dev].[dbo].[Branch] b ON le.BranchId = b.Id "
             # "WHERE le.Specialty LIKE :speciality AND b.BranchName LIKE :location;"
             # )
+            print("spciality")
+            print(speciality)
+            print("location")
+            print(location)
 
             query = text(
                 "SELECT TOP 5 le.Id AS DoctorId, le.DocName AS DoctorName, le.Specialty AS Speciality, le.Fee AS Fee, le.Rating AS Rating, le.HasDiscount AS HasDiscount, "
                 "b.BranchName AS Branch, b.Address AS Address,"
                 "d.DiscountType AS DiscountType, d.DiscountValue AS DiscountValue "
-                "FROM [DrAide_Dev].[dbo].[LowerEntity] le "
-                "JOIN [DrAide_Dev].[dbo].[Branch] b ON le.BranchId = b.Id "
-                "LEFT JOIN [DrAide_Dev].[dbo].[Discount] d ON le.discount_id = d.discount_id "
+                "FROM [ [dbo].[LowerEntity] le "
+                "JOIN  [dbo].[Branch] b ON le.BranchId = b.Id "
+                "LEFT JOIN  [dbo].[Discount] d ON le.discount_id = d.discount_id "
                 "WHERE le.Specialty LIKE :speciality AND b.Address LIKE :location AND le.isActive = 1;"
             )
             result = cursor.execute(query, {'speciality': f"%{speciality.value}%", 'location': f"%{location}%"})

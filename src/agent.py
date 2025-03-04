@@ -39,10 +39,15 @@ cb = CustomCallBackHandler()
 model = ChatOpenAI(model="gpt-4o", callbacks=[cb])
 
 class SpecialityEnum(str, Enum):
+    DERMATOLOGIST ="Dermatologist"
     DERMATOLOGY = "Dermatology"
+    
     DENTISTRY = "Dentistry"
     CARDIOLOGY = "Cardiology"
     ORTHOPEDICS = "Orthopedics"
+    GENERALSURGERY = "General Surgery"
+    GENERALDENTIST = "General Dentist"
+    ORTHODONTIST = "Orthodontist"
 
 def get_session_history(session_id: str) -> BaseChatMessageHistory:
     if session_id not in store:

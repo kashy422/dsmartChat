@@ -416,6 +416,7 @@ async def analyze_image(request: ImageRequest):
 
         description = response.choices[0].message.content
         print(description)
+        
         return {"status": "success", "description": description}
 
     except Exception as e:
