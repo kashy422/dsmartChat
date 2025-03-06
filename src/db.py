@@ -1,6 +1,7 @@
 import os
 from pprint import pprint
 import logging
+from typing import Optional
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 from dotenv import load_dotenv
@@ -8,6 +9,7 @@ import urllib
 from enum import Enum
 import uuid
 import datetime 
+
 
 load_dotenv()
 
@@ -25,6 +27,15 @@ class SpecialityEnum(str, Enum):
     GENERALSURGERY = "General Surgery"
     GENERALDENTIST = "General Dentist"
     ORTHODONTIST = "Orthodontist"
+
+SPECIALITY_MAP = {
+   "Orthodontist": "DENTISTRY",
+    "Periodontist": "DENTISTRY",
+    "Prosthodontist": "DENTISTRY",
+    "General Dentist": "DENTISTRY",
+    "Implantology": "DENTISTRY",
+    "Cosmetic Dentist": "DENTISTRY"
+}
 
 class DB:
     def __init__(self):
@@ -80,6 +91,8 @@ class DB:
     #     except Exception as e:
     #         logger.error(f"Error retrieving specialties: {e}")
     #         return []
+
+    # Function to detect speciality and sub-speciality
 
     def get_available_doctors_specialities(self) -> list[SpecialityEnum]:
         try:

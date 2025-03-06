@@ -79,6 +79,7 @@ class CustomCallBackHandler(BaseCallbackHandler):
     def on_tool_end(self, output: Any, **kwargs: Any) -> Any:
         """Run when the tool ends running."""
         tool_name = kwargs.get('name')
+        print("\n\n")
         print(f"Tool ended: {tool_name}, Output: {output}")  # Debugging statement
 
         if tool_name == 'store_patient_details':
@@ -88,19 +89,46 @@ class CustomCallBackHandler(BaseCallbackHandler):
             print(f"Patient data stored: {self.patient_data}")  # Debugging statement
             
         elif tool_name == 'get_doctor_name_by_speciality':
+            print(1)
             if self.patient_data_stored:
+                print(2)
                 combined_data = {
                     "patient": self.patient_data,  # Include stored patient data
                     "message": "Here are some available doctors according to your requirements:",
                     "data": output  # The output from the get_doctor_name_by_speciality
                 }
+                print(3)
                 self.docs_data = combined_data
             else:
+                print(4)
                 # If patient data is not available, just store doctor data
                 self.docs_data = {
                     "message": "Here are some available doctors according to your requirements:",
                     "data": output
                 }
+                print(5)
+
+            # Debugging statement to check combined response
+            print(f"Combined response: {self.docs_data}")
+        elif tool_name == 'get_doctor_by_speciality':
+            print(1)
+            if self.patient_data_stored:
+                print(2)
+                combined_data = {
+                    "patient": self.patient_data,  # Include stored patient data
+                    "message": "Here are some available doctors according to your requirements:",
+                    "data": output  # The output from the get_doctor_name_by_speciality
+                }
+                print(3)
+                self.docs_data = combined_data
+            else:
+                print(4)
+                # If patient data is not available, just store doctor data
+                self.docs_data = {
+                    "message": "Here are some available doctors according to your requirements:",
+                    "data": output
+                }
+                print(5)
 
             # Debugging statement to check combined response
             print(f"Combined response: {self.docs_data}")
