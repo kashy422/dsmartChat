@@ -286,6 +286,6 @@ store_patient_details_tool = StructuredTool.from_function(
     name="store_patient_details",
     description="Store basic details of a paitent",
     args_schema=StorePatientDetails,
-    return_direct=True,
+    return_direct=False,
     handle_tool_error="Paitent Details Incomplete",
 )
