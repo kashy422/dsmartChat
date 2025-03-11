@@ -110,7 +110,7 @@ def get_doctor_name_by_speciality(speciality: str, location: str, sub_speciality
             'sub_speciality': sub_speciality,
             'location': location
         })
-
+        print("++++++++++++++++++++++++++ DONE ++++++++++++++++++++++")
         def convert_decimals(obj):
             if isinstance(obj, list):
                 return [convert_decimals(i) for i in obj]
@@ -119,7 +119,7 @@ def get_doctor_name_by_speciality(speciality: str, location: str, sub_speciality
             elif isinstance(obj, Decimal):
                 return float(obj)
             return obj
-
+        print("++++++++++++++++++++++++++ OK ++++++++++++++++++++++")
         records = [convert_decimals(dict(row)) for row in result.mappings()]
 
         # Fetch and return results
@@ -261,16 +261,18 @@ def store_patient_details(
     Gender: Optional[str] = None,
     Location: Optional[str] = None,
     Issue: Optional[str] = None,
-    # Contact: Optional[str] = None,
+    session_id: Optional[str] = None  # Add session_id as an optional argument
 ) -> dict:
     """Store the information of a patient with default values for missing fields."""
-    return {
+    patient_info = {
         "Name": Name or None,
         "Gender": Gender or None,
-        "Address": Location or None,
+        "Location": Location or None,
         "Issue": Issue or None,
-        # "Contact": Contact or "Not Provided",
+        "session_id": session_id  # Include session_id in the patient info
     }
+    print("Storing patient info:", patient_info)  # Debugging statement
+    return patient_info
 
 
 
