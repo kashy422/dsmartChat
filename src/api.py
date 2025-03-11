@@ -500,11 +500,16 @@ def reset():
 
 
 def process_message(message: str, session_id: str) -> dict["str", "str"]:
+    # print("------------------------------------------------------")
+    # print("MESSAGE IN PROCESS MESSAGE IN API.PY : ", message)
+    
     response = engine.invoke(
         {"input": message},
         config={"configurable": {"session_id": session_id},
                 'callbacks': [callBackHandler]
                 })
+    # print("RESPONSE: ", response)
+    # print("------------------------------------------------------")
 
     if '</EXIT>' in str(response):
         engine.history_messages_key = []

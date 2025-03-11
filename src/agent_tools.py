@@ -6,6 +6,8 @@ from typing import List, Optional, Union
 from sqlalchemy import text
 from .db import DB
 import re
+from decimal import Decimal
+
 
 db = DB()
 
@@ -55,20 +57,78 @@ def get_doctor_name_by_speciality(speciality: str, location: str, sub_speciality
     try:
         cursor = db.engine.connect()
 
-        # Format sub-speciality correctly (comma-separated if multiple exist)
-        sub_speciality_value = ', '.join(sub_speciality) if isinstance(sub_speciality, list) else (sub_speciality or "")
+
+        print("++++++++++++++++++++++++++++++++++++++++++++")
+        print("BEFORE")
+        print("SPECIALTY: ", speciality)
+        print("SUB SPECIALTY: ",sub_speciality)
+        print("+++++++++++++++++++++++++++++++++++++++++++++++")
+
+
+        # Normalize speciality
+        speciality = speciality.strip() if speciality else ""
+
+        # Normalize sub_speciality (ensure it's a list and convert to string)
+        if isinstance(sub_speciality, list):
+            sub_speciality = [s.strip() for s in sub_speciality if s]  # Remove empty values
+            sub_speciality = ', '.join(set(sub_speciality))  # Remove duplicates and convert to string
+        elif isinstance(sub_speciality, str):
+            sub_speciality = sub_speciality.strip()
+        else:
+            sub_speciality = ""
+
+        # Check if speciality needs mapping
+        if speciality in SPECIALITY_MAP:
+            mapped_speciality = SPECIALITY_MAP[speciality]
+            if speciality not in SPECIALITY_MAP.values():
+                speciality, sub_speciality = mapped_speciality, speciality  # Move original speciality to sub-speciality
+
+        # Preserve valid sub_specialities (like "Orthodontist")
+        if sub_speciality and sub_speciality not in SPECIALITY_MAP:
+            pass  # Keep sub_speciality unchanged
+
+        # Default sub_speciality to "General Dentist" only if speciality is DENTISTRY and sub_speciality is empty
+        if not sub_speciality and speciality == "DENTISTRY":
+            sub_speciality = "General Dentist"
+
+        # Ensure `sub_speciality` is a string
+        sub_speciality = sub_speciality if sub_speciality else ""
+
+
+
+
+
+
+        print("++++++++++++++++++++++++++++++++++++++++++++")
+        print("AFTER")
+        print("SPECIALTY: ", speciality)
+        print("SUB SPECIALTY: ",sub_speciality)
+        print("++++++++++++++++++++++++++++++++++++++++++++")
 
         # Call stored procedure
         stored_proc_query = text("EXEC GetRandomEntitiesByCriteria :speciality, :sub_speciality, :location")
 
         result = cursor.execute(stored_proc_query, {
             'speciality': speciality,
-            'sub_speciality': sub_speciality_value,
+            'sub_speciality': sub_speciality,
             'location': location
         })
 
+        def convert_decimals(obj):
+            if isinstance(obj, list):
+                return [convert_decimals(i) for i in obj]
+            elif isinstance(obj, dict):
+                return {k: convert_decimals(v) for k, v in obj.items()}
+            elif isinstance(obj, Decimal):
+                return float(obj)
+            return obj
+
+        records = [convert_decimals(dict(row)) for row in result.mappings()]
+
         # Fetch and return results
-        records = [dict(row) for row in result.mappings()]
+        # records = [dict(row) for row in result.mappings()]
+
+
         cursor.close()
 
         return records
@@ -142,7 +202,7 @@ get_doc_by_speciality_tool = StructuredTool.from_function(
     name="get_doctor_by_speciality",
     description="Get the list of available doctors for a given speciality and sub-speciality, based on symptoms.",
     args_schema=GetDoctorsBySpecialityInput,
-    return_direct=True,
+    return_direct=False,
     handle_tool_error="No doctors found for the given speciality, sub-speciality, and location.",
 )
 

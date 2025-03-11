@@ -1,6 +1,8 @@
 from typing import Any
 from datetime import datetime
 from langchain_core.callbacks import BaseCallbackHandler
+import json 
+import urllib.parse
 
 # class CustomCallBackHandler(BaseCallbackHandler):
 
@@ -76,6 +78,8 @@ class CustomCallBackHandler(BaseCallbackHandler):
         self.patient_data = {}
         self.patient_data_stored = False  # Flag to track if patient data has been stored
 
+    
+
     def on_tool_end(self, output: Any, **kwargs: Any) -> Any:
         """Run when the tool ends running."""
         tool_name = kwargs.get('name')
@@ -93,9 +97,12 @@ class CustomCallBackHandler(BaseCallbackHandler):
             if self.patient_data_stored:
                 print(2)
                 combined_data = {
-                    "patient": self.patient_data,  # Include stored patient data
-                    "message": "Here are some available doctors according to your requirements:",
-                    "data": output  # The output from the get_doctor_name_by_speciality
+                    "role" : "assistant",
+                    "content" : {
+                        "patient": self.patient_data,  # Include stored patient data
+                        "message": "Here are some available doctors according to your requirements:",
+                        "data": output
+                    }  # The output from the get_doctor_name_by_speciality
                 }
                 print(3)
                 self.docs_data = combined_data
@@ -103,8 +110,11 @@ class CustomCallBackHandler(BaseCallbackHandler):
                 print(4)
                 # If patient data is not available, just store doctor data
                 self.docs_data = {
-                    "message": "Here are some available doctors according to your requirements:",
-                    "data": output
+                    "role" : "assistant",
+                    "content" : {
+                        "message": "Here are some available doctors according to your requirements:",
+                        "data": output
+                    }
                 }
                 print(5)
 
@@ -115,9 +125,12 @@ class CustomCallBackHandler(BaseCallbackHandler):
             if self.patient_data_stored:
                 print(2)
                 combined_data = {
-                    "patient": self.patient_data,  # Include stored patient data
-                    "message": "Here are some available doctors according to your requirements:",
-                    "data": output  # The output from the get_doctor_name_by_speciality
+                    "role" : "assistant",
+                    "content" : {
+                        "patient": self.patient_data,  # Include stored patient data
+                        "message": "Here are some available doctors according to your requirements:",
+                        "data": output  # The output from the get_doctor_name_by_speciality
+                    }
                 }
                 print(3)
                 self.docs_data = combined_data
@@ -125,10 +138,30 @@ class CustomCallBackHandler(BaseCallbackHandler):
                 print(4)
                 # If patient data is not available, just store doctor data
                 self.docs_data = {
-                    "message": "Here are some available doctors according to your requirements:",
-                    "data": output
+                    "role" : "assistant",
+                    "content" : {
+                        "message": "Here are some available doctors according to your requirements:",
+                        "data": output
+                    }
                 }
                 print(5)
+
+            # self.docs_data = {
+            #     "role": "assistant",
+            #     "content": {
+            #         "patient": self.patient_data,  # Include stored patient data
+            #         "message": "Here are some available doctors according to your requirements:",
+            #         "data": json.dumps(output)  # The output from the get_doctor_name_by_speciality
+            #     }  # Convert dict to string to match LangChain's expected content format
+            # }
+            # self.docs_data = {
+            #     "role": "assistant",
+            #     "content": urllib.parse.urlencode({
+            #         "patient": self.patient_data,  # Include stored patient data
+            #         "message": "Here are some available doctors according to your requirements:",
+            #         "data": output  # The output from get_doctor_name_by_speciality
+            #     })  # Convert dict to URL-encoded string to match LangChain's expected content format
+            # }
 
             # Debugging statement to check combined response
             print(f"Combined response: {self.docs_data}")
@@ -138,8 +171,13 @@ class CustomCallBackHandler(BaseCallbackHandler):
 
 
 
-        # if tool_name == 'get_doctor_name_by_speciality':
-        #     # Store the patient data
-        #     self.patient_data = output  # Store patient data correctly
-        #     print(f"Patient data stored: {self.patient_data}")  # Debugging statement
+#         # if tool_name == 'get_doctor_name_by_speciality':
+#         #     # Store the patient data
+#         #     self.patient_data = output  # Store patient data correctly
+#         #     print(f"Patient data stored: {self.patient_data}")  # Debugging statement
+
+
+
+
+### UPDATED
 

@@ -9,6 +9,7 @@ import urllib
 from enum import Enum
 import uuid
 import datetime 
+from decimal import Decimal
 
 
 load_dotenv()
