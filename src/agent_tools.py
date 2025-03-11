@@ -65,6 +65,10 @@ def get_doctor_name_by_speciality(speciality: str, location: str, sub_speciality
         print("+++++++++++++++++++++++++++++++++++++++++++++++")
 
 
+        if speciality == "Dentist" :
+            speciality = "DENTISTRY"
+        elif speciality == "Dentistry":
+            speciality = "DENTISTRY"
         # Normalize speciality
         speciality = speciality.strip() if speciality else ""
 

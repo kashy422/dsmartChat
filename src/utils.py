@@ -97,12 +97,9 @@ class CustomCallBackHandler(BaseCallbackHandler):
             if self.patient_data_stored:
                 print(2)
                 combined_data = {
-                    "role" : "assistant",
-                    "content" : {
-                        "patient": self.patient_data,  # Include stored patient data
+                    "patient": self.patient_data,  # Include stored patient data
                         "message": "Here are some available doctors according to your requirements:",
-                        "data": output
-                    }  # The output from the get_doctor_name_by_speciality
+                        "data": output # The output from the get_doctor_name_by_speciality
                 }
                 print(3)
                 self.docs_data = combined_data
@@ -110,11 +107,8 @@ class CustomCallBackHandler(BaseCallbackHandler):
                 print(4)
                 # If patient data is not available, just store doctor data
                 self.docs_data = {
-                    "role" : "assistant",
-                    "content" : {
-                        "message": "Here are some available doctors according to your requirements:",
-                        "data": output
-                    }
+                    "message": "Here are some available doctors according to your requirements:",
+                    "data": output
                 }
                 print(5)
 
@@ -125,12 +119,9 @@ class CustomCallBackHandler(BaseCallbackHandler):
             if self.patient_data_stored:
                 print(2)
                 combined_data = {
-                    "role" : "assistant",
-                    "content" : {
-                        "patient": self.patient_data,  # Include stored patient data
-                        "message": "Here are some available doctors according to your requirements:",
-                        "data": output  # The output from the get_doctor_name_by_speciality
-                    }
+                    "patient": self.patient_data,  # Include stored patient data
+                    "message": "Here are some available doctors according to your requirements:",
+                    "data": output
                 }
                 print(3)
                 self.docs_data = combined_data
@@ -138,11 +129,8 @@ class CustomCallBackHandler(BaseCallbackHandler):
                 print(4)
                 # If patient data is not available, just store doctor data
                 self.docs_data = {
-                    "role" : "assistant",
-                    "content" : {
-                        "message": "Here are some available doctors according to your requirements:",
-                        "data": output
-                    }
+                    "message": "Here are some available doctors according to your requirements:",
+                    "data": output
                 }
                 print(5)
 
