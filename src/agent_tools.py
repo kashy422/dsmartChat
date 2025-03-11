@@ -72,34 +72,27 @@ def get_doctor_name_by_speciality(speciality: str, location: str, sub_speciality
         # Normalize speciality
         speciality = speciality.strip() if speciality else ""
 
-        # Normalize sub_speciality (ensure it's a list and convert to string)
-        if isinstance(sub_speciality, list):
-            sub_speciality = [s.strip() for s in sub_speciality if s]  # Remove empty values
-            sub_speciality = ', '.join(set(sub_speciality))  # Remove duplicates and convert to string
-        elif isinstance(sub_speciality, str):
-            sub_speciality = sub_speciality.strip()
-        else:
-            sub_speciality = ""
-
-        # Check if speciality needs mapping
+         # Ensure that speciality comes from `SPECIALITY_MAP`
         if speciality in SPECIALITY_MAP:
             mapped_speciality = SPECIALITY_MAP[speciality]
             if speciality not in SPECIALITY_MAP.values():
                 speciality, sub_speciality = mapped_speciality, speciality  # Move original speciality to sub-speciality
 
-        # Preserve valid sub_specialities (like "Orthodontist")
-        if sub_speciality and sub_speciality not in SPECIALITY_MAP:
-            pass  # Keep sub_speciality unchanged
+        # If sub_speciality is a list, convert to a comma-separated string
+        if isinstance(sub_speciality, list):
+            sub_speciality = ', '.join(set([s.strip() for s in sub_speciality if s]))  # Clean and remove duplicates
+        elif isinstance(sub_speciality, str):
+            # Normalize existing string (remove extra spaces)
+            sub_speciality = ', '.join(set([s.strip() for s in sub_speciality.split(',') if s.strip()]))
 
-        # Default sub_speciality to "General Dentist" only if speciality is DENTISTRY and sub_speciality is empty
+        # Default sub-speciality if empty
         if not sub_speciality and speciality == "DENTISTRY":
             sub_speciality = "General Dentist"
 
-        # Ensure `sub_speciality` is a string
-        sub_speciality = sub_speciality if sub_speciality else ""
-
-
-
+        # Ensure `sub_speciality` contains only values from `SPECIALITY_MAP`
+        if sub_speciality:
+            valid_sub_specialities = [s for s in sub_speciality.split(', ') if s in SPECIALITY_MAP]
+            sub_speciality = ', '.join(valid_sub_specialities) if valid_sub_specialities else None
 
 
 
