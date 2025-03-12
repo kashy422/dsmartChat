@@ -191,11 +191,7 @@ SYMPTOM_TO_SPECIALITY = {
 # )
 
 get_doc_by_speciality_tool = StructuredTool.from_function(
-    func=lambda speciality, location, sub_speciality=None: get_doctor_name_by_speciality(
-        speciality, 
-        location, 
-        sub_speciality
-    ),
+    func=get_doctor_name_by_speciality,
     name="get_doctor_by_speciality",
     description="Get the list of available doctors for a given speciality and sub-speciality, based on symptoms.",
     args_schema=GetDoctorsBySpecialityInput,
@@ -279,8 +275,8 @@ def store_patient_details(
 store_patient_details_tool = StructuredTool.from_function(
     func=store_patient_details,
     name="store_patient_details",
-    description="Store basic details of a paitent",
+    description="Store basic details of a patient",
     args_schema=StorePatientDetails,
     return_direct=False,
-    handle_tool_error="Paitent Details Incomplete",
+    handle_tool_error="Patient Details Incomplete",
 )

@@ -17,8 +17,16 @@ from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_openai import ChatOpenAI
+from openai import OpenAI
+from typing import Optional
 
-from .agent_tools import get_available_doctors_specialities, get_doc_by_speciality_tool, store_patient_details_tool, store_patient_details
+from .agent_tools import (
+    get_available_doctors_specialities, 
+    get_doc_by_speciality_tool,
+    store_patient_details_tool,
+    store_patient_details,
+    GetDoctorsBySpecialityInput
+)
 from .common import write
 from .consts import SYSTEM_AGENT_SIMPLE
 from .utils import CustomCallBackHandler
@@ -31,6 +39,21 @@ os.environ["LANGCHAIN_TRACING_V2"] = "true"
 os.environ["LANGCHAIN_API_KEY"] = "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"  # Exposed intentionally
 
 colorama.init(autoreset=True)
+
+class ChatHistory:
+    def __init__(self):
+        self.messages = []
+    
+    def add_user_message(self, content: str):
+        self.messages.append({"type": "human", "content": content})
+    
+    def add_ai_message(self, content: str):
+        self.messages.append({"type": "ai", "content": content})
+    
+    def clear(self):
+        self.messages = []
+
+# Store for chat histories
 store = {}
 
 set_verbose(False)
@@ -47,99 +70,247 @@ class SpecialityEnum(str, Enum):
     GENERALDENTIST = "General Dentist"
     ORTHODONTIST = "Orthodontist"
 
-def get_session_history(session_id: str) -> BaseChatMessageHistory:
+def get_session_history(session_id: str) -> ChatHistory:
     if session_id not in store:
-        store[session_id] = ChatMessageHistory()
-    history =  store[session_id]
+        store[session_id] = ChatHistory()
+    history = store[session_id]
     print("-------------------SESSION HISTORY-----------------------")
     print(f"\n🔍 Chat History for Session: {session_id}")
-    #print("History Object Type:", type(history))
-    #print("Available Attributes:", dir(history))  # Lists all attributes and methods
-    print("History as Dict:", vars(history))  # Shows actual stored data
+    print("History as Dict:", vars(history))
     print("HISTORY: ", history)
     for msg in history.messages:
-        print("MESSAGE:" ,msg)
-        # print(f"Message Type: {msg.type} Content: {msg.content}")
+        print("MESSAGE:", msg)
     print("-------------------SESSION HISTORY-----------------------")
     return history
 
 def chat_engine():
-    tools = [get_available_doctors_specialities, get_doc_by_speciality_tool, store_patient_details_tool]
+    client = OpenAI()
+    
+    def format_tools_for_openai():
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_available_doctors_specialities",
+                    "description": "Get list of available medical specialities",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_doctor_by_speciality",
+                    "description": "Get doctors by speciality and location",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "speciality": {
+                                "type": "string",
+                                "description": "Medical speciality"
+                            },
+                            "location": {
+                                "type": "string",
+                                "description": "Location/city name"
+                            },
+                            "sub_speciality": {
+                                "type": "string",
+                                "description": "Optional sub-speciality of the doctor",
+                                "optional": True
+                            }
+                        },
+                        "required": ["speciality", "location"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "store_patient_details_tool",
+                    "description": "Store patient information",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "Name": {
+                                "type": "string",
+                                "description": "Patient's name"
+                            },
+                            "Gender": {
+                                "type": "string",
+                                "description": "Patient's gender"
+                            },
+                            "Location": {
+                                "type": "string",
+                                "description": "Patient's location"
+                            },
+                            "Issue": {
+                                "type": "string",
+                                "description": "Patient's medical issue"
+                            }
+                        },
+                        "required": ["Name", "Gender", "Location", "Issue"]
+                    }
+                }
+            }
+        ]
 
-    messages = [
-        SystemMessagePromptTemplate(prompt=PromptTemplate(template=SYSTEM_AGENT_SIMPLE, input_variables=[])),
-        AIMessagePromptTemplate.from_template(
-            "Hello, I am your personal medical assistant. How are you feeling today?"),
-        MessagesPlaceholder(variable_name="chat_history", optional=True),
-        HumanMessagePromptTemplate(prompt=PromptTemplate(input_variables=["input"], template="User: {input}")),
-        MessagesPlaceholder(variable_name="agent_scratchpad")
-    ]
-
-    prompt = ChatPromptTemplate.from_messages(messages=messages)
-
-    agent = create_tool_calling_agent(llm=model, tools=tools, prompt=prompt)
-
-    agent_executor = AgentExecutor(agent=agent, tools=tools)
-
-    agent_with_chat_history = RunnableWithMessageHistory(
-        agent_executor,
-        get_session_history,
-        input_messages_key="input",
-        history_messages_key="chat_history"
-    )
-
-    return agent_with_chat_history
+    class OpenAIChatEngine:
+        def __init__(self):
+            self.tools = format_tools_for_openai()
+            self.history_messages_key = []
+            self.last_patient_info = None
+            self.last_doctors_data = None
+            
+        def invoke(self, inputs, config=None):
+            message = inputs["input"]
+            session_id = inputs.get("session_id", "default")
+            
+            # Get chat history
+            history = get_session_history(session_id)
+            messages = [
+                {"role": "system", "content": SYSTEM_AGENT_SIMPLE},
+                {"role": "assistant", "content": "Hello, I am your personal medical assistant. How are you feeling today?"}
+            ]
+            
+            # Add chat history
+            for msg in history.messages:
+                role = "assistant" if msg.type == "ai" else "user"
+                messages.append({"role": role, "content": msg.content})
+            
+            # Add current message
+            messages.append({"role": "user", "content": message})
+            
+            try:
+                # Make API call
+                response = client.chat.completions.create(
+                    model="gpt-4-turbo-preview",
+                    messages=messages,
+                    tools=self.tools,
+                    tool_choice="auto"
+                )
+                
+                # Process response
+                assistant_message = response.choices[0].message
+                
+                # Handle tool calls if any
+                if assistant_message.tool_calls:
+                    # Add the assistant's message with the tool calls
+                    messages.append({
+                        "role": "assistant",
+                        "content": assistant_message.content if assistant_message.content else None,
+                        "tool_calls": [
+                            {
+                                "id": tool_call.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tool_call.function.name,
+                                    "arguments": tool_call.function.arguments
+                                }
+                            } for tool_call in assistant_message.tool_calls
+                        ]
+                    })
+                    
+                    # Process each tool call and add their responses
+                    for tool_call in assistant_message.tool_calls:
+                        func_name = tool_call.function.name
+                        func_args = json.loads(tool_call.function.arguments)
+                        
+                        try:
+                            # Execute the appropriate function
+                            if func_name == "get_available_doctors_specialities":
+                                result = get_available_doctors_specialities()
+                            elif func_name == "get_doctor_by_speciality":
+                                result = get_doc_by_speciality_tool.invoke(func_args)
+                                self.last_doctors_data = result
+                            elif func_name == "store_patient_details_tool":
+                                func_args["session_id"] = session_id
+                                result = store_patient_details_tool.invoke(func_args)
+                                self.last_patient_info = result
+                            
+                            # Add the tool response message
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "content": json.dumps(result)
+                            })
+                        except Exception as e:
+                            print(f"Error executing tool {func_name}: {str(e)}")
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "content": json.dumps({"error": str(e)})
+                            })
+                    
+                    # Get final response with tool outputs
+                    final_response = client.chat.completions.create(
+                        model="gpt-4-turbo-preview",
+                        messages=messages
+                    )
+                    
+                    # Format response in the desired structure
+                    formatted_response = {
+                        "response": {
+                            "message": final_response.choices[0].message.content
+                        }
+                    }
+                    
+                    # Add patient info if available
+                    if self.last_patient_info:
+                        formatted_response["response"]["patient"] = self.last_patient_info
+                        self.last_patient_info = None  # Clear after use
+                    
+                    # Add doctors data if available
+                    if self.last_doctors_data:
+                        formatted_response["response"]["data"] = self.last_doctors_data
+                        self.last_doctors_data = None  # Clear after use
+                    
+                    return formatted_response
+                
+                # If no tool calls, return simple response
+                return {
+                    "response": {
+                        "message": assistant_message.content
+                    }
+                }
+            except Exception as e:
+                print(f"Error in chat completion: {str(e)}")
+                raise e
+    
+    return OpenAIChatEngine()
 
 
 def repl_chat(session_id: str):
     agent = chat_engine()
     history = get_session_history(session_id)
-    print("***********************INSIDE REPL CHAT")
-    write("Agent: Hello, I am your personal medical assistant. How are you feeling today?", role="assistant")
-
+    
+    write("Welcome to the Medical Assistant Chat!", role="system")
+    write("Type 'exit' to end the conversation.", role="system")
+    
     while True:
-        prompt = input(f"{Fore.WHITE}You > {Style.RESET_ALL}")
-        if prompt.lower() == "exit":
+        try:
+            # Get user input
+            user_input = input(Fore.GREEN + "You: " + Style.RESET_ALL)
+            
+            if user_input.lower() == 'exit':
+                write("Goodbye!", role="assistant")
+                break
+            
+            # Add to history and get response
+            history.add_user_message(user_input)
+            response = agent.invoke({"input": user_input, "session_id": session_id})
+            
+            # Process and display response
+            bot_response = response['response']['message']
+            history.add_ai_message(bot_response)
+            write(f"Agent: {bot_response}", role="assistant")
+            
+        except KeyboardInterrupt:
+            write("\nGoodbye!", role="system")
             break
-
-        print("SAVING PROMPT IN HISTORY")
-        history.add_user_message(prompt)
-        
-
-        # Example extraction logic for patient details from user's input
-        if "pain" in prompt.lower():  # Example logic, adjust as needed
-            patient_details = store_patient_details(Location="Riyadh", Issue="Pain in left top tooth")
-            cb.on_tool_end(patient_details, name='store_patient_details')  # Manually invoke callback
-            
-
-        response = agent.invoke(
-            {"input": prompt},
-            config={"configurable": {"session_id": session_id}, 'callbacks': [cb]}
-        )
-
-       
-
-        # Construct combined response using `cb.docs_data` if available
-        if cb.docs_data:
-            combined_response = cb.docs_data
-            if 'patient_data' not in combined_response and cb.patient_data:
-                combined_response["patient"] = cb.patient_data
-
-            # Now write the fully combined response to the user
-            # write(f"Agent: {combined_response['message']}", role="assistant")
-            # write(f"Patient Details: {combined_response.get('patient')}", role="assistant")
-            # write(f"Available Doctors: {combined_response['data']}", role="assistant")
-            
-            doctors_list = combined_response.get("data", [])
-            doctors_text = "\n".join([f"- {doc}" for doc in doctors_list])
-
-            bot_response = f"{combined_response['message']}\n\n**Patient Details:** {combined_response.get('patient')}\n\n**Available Doctors:**\n{doctors_text}"
-
-        else:
-            bot_response = response['output']
-            # write(f"Agent: {response['output']}", role="assistant")
-
-        print("SAVING RESPONSE IN HISTORY")
-        history.add_ai_message(bot_response)
-        write(f"Agent: {bot_response}", role="assistant")
+        except Exception as e:
+            write(f"An error occurred: {str(e)}", role="error")
+            continue
 

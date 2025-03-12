@@ -111,9 +111,6 @@ async def chat(
             # Process the transcription result
             response = process_message(transcription, session_id=split_text[1])
             
-            # Extract the response message from engine.invoke
-            engine_response = response['response']
-            
             # If callBackHandler has docs_data, return the data and clear it
             if callBackHandler.docs_data:
                 response_data = {
@@ -125,9 +122,9 @@ async def chat(
             # If no docs_data, return the normal engine response along with audio base64
             return {
                 "response": {
-                    "message": engine_response['output'],  # Assuming the output contains the actual message
+                    "message": response['response']['message'],  # Updated to use new structure
                     "transcription": transcription,
-                    "Audio_base_64": await text_to_speech(engine_response['output'])  # Using AWS Polly
+                    "Audio_base_64": await text_to_speech(response['response']['message'])  # Using AWS Polly
                 }
             }
         except Exception as e:
@@ -142,9 +139,6 @@ async def chat(
         # Process the message and generate a response
         response = process_message(message, session_id=split_text[1])
         
-        # Extract the response message from engine.invoke
-        engine_response = response['response']
-        
         # If callBackHandler has docs_data, return the data and clear it
         if callBackHandler.docs_data:
             response_data = {
@@ -153,12 +147,8 @@ async def chat(
             callBackHandler.docs_data = []  # Clear the data after it's returned
             return response_data
         
-        # If no docs_data, return the normal engine response
-        return {
-            "response": {
-                "message": engine_response['output']  # Assuming the output contains the actual message
-            }
-        }
+        # Return the response as is since it's already in the correct format
+        return response
     
     # If neither audio nor message is provided, raise an error
     raise HTTPException(status_code=400, detail="Either a message or an audio file must be provided.")
@@ -222,18 +212,22 @@ def reset():
 
 def process_message(message: str, session_id: str) -> dict["str", "str"]:
     thread_local.session_id = session_id  
-    response = engine.invoke(
-        {"input": message, "session_id": session_id},  # Pass session_id here
-        config={
-            "configurable": {"session_id": session_id},  # Pass session_id here
-            "callbacks": [callBackHandler]  # Pass the callback handler
-        }
-    )
+    try:
+        response = engine.invoke(
+            {"input": message, "session_id": session_id},
+            config={
+                "configurable": {"session_id": session_id},
+                "callbacks": [callBackHandler]
+            }
+        )
 
-    if '</EXIT>' in str(response):
-        engine.history_messages_key = []
+        if '</EXIT>' in str(response):
+            engine.history_messages_key = []
 
-    return {"response": response}
+        return {"response": response}
+    except Exception as e:
+        print(f"Error in process_message: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 #
