@@ -264,7 +264,7 @@ def chat_engine():
                     # Format response in the desired structure
                     formatted_response = {
                         "response": {
-                            "message": final_response.choices[0].message.content
+                            "message": final_response.choices[0].message.content.split("\n\n")[0]
                         }
                     }
                     
@@ -286,7 +286,7 @@ def chat_engine():
                 # If no tool calls, return simple response with session patient data if available
                 formatted_response = {
                     "response": {
-                        "message": assistant_message.content
+                        "message": assistant_message.content.split("\n\n")[0]
                     }
                 }
                 
