@@ -43,6 +43,7 @@ colorama.init(autoreset=True)
 class ChatHistory:
     def __init__(self):
         self.messages = []
+        self.patient_data = None  # Add patient data storage
     
     def add_user_message(self, content: str):
         self.messages.append({"type": "human", "content": content})
@@ -50,8 +51,15 @@ class ChatHistory:
     def add_ai_message(self, content: str):
         self.messages.append({"type": "ai", "content": content})
     
+    def set_patient_data(self, data: dict):
+        self.patient_data = data
+    
+    def get_patient_data(self):
+        return self.patient_data
+    
     def clear(self):
         self.messages = []
+        self.patient_data = None
 
 # Store for chat histories
 store = {}
@@ -161,9 +169,7 @@ def chat_engine():
         def __init__(self):
             self.tools = format_tools_for_openai()
             self.history_messages_key = []
-            self.last_patient_info = None
-            self.last_doctors_data = None
-            
+        
         def invoke(self, inputs, config=None):
             message = inputs["input"]
             session_id = inputs.get("session_id", "default")
@@ -214,6 +220,9 @@ def chat_engine():
                     })
                     
                     # Process each tool call and add their responses
+                    doctors_data = None
+                    patient_info = None
+                    
                     for tool_call in assistant_message.tool_calls:
                         func_name = tool_call.function.name
                         func_args = json.loads(tool_call.function.arguments)
@@ -224,11 +233,13 @@ def chat_engine():
                                 result = get_available_doctors_specialities()
                             elif func_name == "get_doctor_by_speciality":
                                 result = get_doc_by_speciality_tool.invoke(func_args)
-                                self.last_doctors_data = result
+                                doctors_data = result
                             elif func_name == "store_patient_details_tool":
                                 func_args["session_id"] = session_id
                                 result = store_patient_details_tool.invoke(func_args)
-                                self.last_patient_info = result
+                                patient_info = result
+                                # Store patient info in session
+                                history.set_patient_data(result)
                             
                             # Add the tool response message
                             messages.append({
@@ -257,24 +268,35 @@ def chat_engine():
                         }
                     }
                     
-                    # Add patient info if available
-                    if self.last_patient_info:
-                        formatted_response["response"]["patient"] = self.last_patient_info
-                        self.last_patient_info = None  # Clear after use
+                    # Add patient info from session if available
+                    session_patient_data = history.get_patient_data()
+                    if session_patient_data:
+                        formatted_response["response"]["patient"] = session_patient_data
+                    
+                    # Add new patient info if just collected
+                    if patient_info and patient_info != session_patient_data:
+                        formatted_response["response"]["patient"] = patient_info
                     
                     # Add doctors data if available
-                    if self.last_doctors_data:
-                        formatted_response["response"]["data"] = self.last_doctors_data
-                        self.last_doctors_data = None  # Clear after use
+                    if doctors_data:
+                        formatted_response["response"]["data"] = doctors_data
                     
                     return formatted_response
                 
-                # If no tool calls, return simple response
-                return {
+                # If no tool calls, return simple response with session patient data if available
+                formatted_response = {
                     "response": {
                         "message": assistant_message.content
                     }
                 }
+                
+                # Add patient info from session if available
+                session_patient_data = history.get_patient_data()
+                if session_patient_data:
+                    formatted_response["response"]["patient"] = session_patient_data
+                
+                return formatted_response
+                
             except Exception as e:
                 print(f"Error in chat completion: {str(e)}")
                 raise e
