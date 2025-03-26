@@ -63,7 +63,9 @@ class DB:
 
             # SQLAlchemy connection string
             db_url = f"mssql+pyodbc:///?odbc_connect={params}"
-            self.engine = create_engine(db_url,pool_pre_ping=True)
+            test_db_url = "mssql+pyodbc://@(localdb)\\MSSQLLocalDB/DrAide_Dev?driver=ODBC+Driver+17+for+SQL+Server&trusted_connection=yes"
+
+            self.engine = create_engine(test_db_url,pool_pre_ping=True)
 
             print("Successfully connected to the MSSQL database.")
 

@@ -84,10 +84,13 @@ def get_session_history(session_id: str) -> ChatHistory:
     history = store[session_id]
     print("-------------------SESSION HISTORY-----------------------")
     print(f"\n🔍 Chat History for Session: {session_id}")
-    print("History as Dict:", vars(history))
-    print("HISTORY: ", history)
+    # print("History as Dict:", vars(history))
+    # print("HISTORY: ", history)
     for msg in history.messages:
-        print("MESSAGE:", msg)
+        print("SINGLE MESSAGE")
+        print(f"{msg['type']} : {msg['content']}")  # ✅ Access dictionary keys correctly
+        print("Message:", msg)  # ✅ Print full message dictionary for debugging
+
     print("-------------------SESSION HISTORY-----------------------")
     return history
 
@@ -189,6 +192,8 @@ def chat_engine():
             # Add current message
             messages.append({"role": "user", "content": message})
             
+            # history.add_user_message(message)
+            
             try:
                 # Make API call
                 response = client.chat.completions.create(
@@ -200,6 +205,7 @@ def chat_engine():
                 
                 # Process response
                 assistant_message = response.choices[0].message
+                # history.add_ai_message(assistant_message.content)
                 
                 # Handle tool calls if any
                 if assistant_message.tool_calls:
@@ -262,38 +268,40 @@ def chat_engine():
                     )
                     
                     # Format response in the desired structure
+                    # formatted_response = {
+                    #     "response": {
+                    #         "message": final_response.choices[0].message.content.split("\n\n")[0]
+                    #     }
+                    # }
+
                     formatted_response = {
-                        "response": {
-                            "message": final_response.choices[0].message.content.split("\n\n")[0]
-                        }
+                        "message": final_response.choices[0].message.content.split("\n\n")[0]
                     }
                     
                     # Add patient info from session if available
                     session_patient_data = history.get_patient_data()
                     if session_patient_data:
-                        formatted_response["response"]["patient"] = session_patient_data
+                        formatted_response["patient"] = session_patient_data
                     
                     # Add new patient info if just collected
                     if patient_info and patient_info != session_patient_data:
-                        formatted_response["response"]["patient"] = patient_info
+                        formatted_response["patient"] = patient_info
                     
                     # Add doctors data if available
                     if doctors_data:
-                        formatted_response["response"]["data"] = doctors_data
+                        formatted_response["data"] = doctors_data
                     
                     return formatted_response
                 
                 # If no tool calls, return simple response with session patient data if available
                 formatted_response = {
-                    "response": {
-                        "message": assistant_message.content.split("\n\n")[0]
-                    }
+                    "message": assistant_message.content.split("\n\n")[0]
                 }
                 
                 # Add patient info from session if available
                 session_patient_data = history.get_patient_data()
                 if session_patient_data:
-                    formatted_response["response"]["patient"] = session_patient_data
+                    formatted_response["patient"] = session_patient_data
                 
                 return formatted_response
                 

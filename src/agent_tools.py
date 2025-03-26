@@ -22,7 +22,7 @@ SPECIALITY_MAP = {
    "Orthodontist": "DENTISTRY",
     "Periodontist": "DENTISTRY",
     "Prosthodontist": "DENTISTRY",
-    "General Dentist": "DENTISTRY",
+    "General Dentistry": "DENTISTRY",
     "Implantology": "DENTISTRY",
     "Cosmetic Dentist": "DENTISTRY"
 }

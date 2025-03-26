@@ -127,6 +127,14 @@ async def chat(
                     "Audio_base_64": await text_to_speech(response['response']['message'])  # Using AWS Polly
                 }
             }
+
+            # return {
+            #     "response": {
+            #         "message": response['message'],  # Updated to use new structure
+            #         "transcription": transcription,
+            #         "Audio_base_64": await text_to_speech(response['message'])  # Using AWS Polly
+            #     }
+            # }
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error transcribing audio: {str(e)}")
         finally:
