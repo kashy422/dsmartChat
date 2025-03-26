@@ -277,37 +277,33 @@ def chat_engine():
                 
                 # Format response in the desired structure
                 formatted_response = {
-                    "response": {
-                        "message": final_response.choices[0].message.content.split("\n\n")[0]
-                    }
+                      "message": final_response.choices[0].message.content.split("\n\n")[0]
                 }
                 
                 # Add patient info from session if available
                 session_patient_data = history.get_patient_data()
                 if session_patient_data:
-                    formatted_response["response"]["patient"] = session_patient_data
+                    formatted_response["patient"] = session_patient_data
                 
                 # Add new patient info if just collected
                 if patient_info and patient_info != session_patient_data:
-                    formatted_response["response"]["patient"] = patient_info
+                    formatted_response["patient"] = patient_info
                 
                 # Add doctors data if available
                 if doctors_data:
-                    formatted_response["response"]["data"] = doctors_data
+                    formatted_response["data"] = doctors_data
                 
                 return formatted_response
             
             # If no tool calls, return simple response with session patient data if available
             formatted_response = {
-                "response": {
                     "message": assistant_message.content.split("\n\n")[0]
-                }
             }
             
             # Add patient info from session if available
             session_patient_data = history.get_patient_data()
             if session_patient_data:
-                formatted_response["response"]["patient"] = session_patient_data
+                formatted_response["patient"] = session_patient_data
             
             return formatted_response
     
