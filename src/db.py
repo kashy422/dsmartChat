@@ -30,12 +30,23 @@ class SpecialityEnum(str, Enum):
     ORTHODONTIST = "Orthodontist"
 
 SPECIALITY_MAP = {
-   "Orthodontist": "DENTISTRY",
-    "Periodontist": "DENTISTRY",
-    "Prosthodontist": "DENTISTRY",
-    "General Dentist": "DENTISTRY",
-    "Implantology": "DENTISTRY",
-    "Cosmetic Dentist": "DENTISTRY"
+#    "Orthodontist": "DENTISTRY",
+#     "Periodontist": "DENTISTRY",
+#     "Prosthodontist": "DENTISTRY",
+#     "General Dentist": "DENTISTRY",
+#     "Implantology": "DENTISTRY",
+#     "Cosmetic Dentist": "DENTISTRY",
+
+    "Endodontics": "DENTISTRY",
+    "Periodontics": "DENTISTRY",
+    "Oral Surgery" : "DENTISTRY",
+    "Oral and Maxillofacial Surgery" : "DENTISTRY",
+    "Surgical Orthodontics" : "DENTISTRY",
+    "Orthodontics" : "DENTISTRY",
+    "Dental Implants" : "DENTISTRY",
+    "Pediatric Dentistry" : "DENTISTRY",
+    "Restorative Dentistry" : "DENTISTRY",
+    "Forensic Dentistry" : "DENTISTRY"
 }
 
 class DB:

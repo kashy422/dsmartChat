@@ -84,13 +84,10 @@ def get_session_history(session_id: str) -> ChatHistory:
     history = store[session_id]
     print("-------------------SESSION HISTORY-----------------------")
     print(f"\n🔍 Chat History for Session: {session_id}")
-    # print("History as Dict:", vars(history))
-    # print("HISTORY: ", history)
+    print("History as Dict:", vars(history))
+    print("HISTORY: ", history)
     for msg in history.messages:
-        print("SINGLE MESSAGE")
-        print(f"{msg['type']} : {msg['content']}")  # ✅ Access dictionary keys correctly
-        print("Message:", msg)  # ✅ Print full message dictionary for debugging
-
+        print("MESSAGE:", msg)
     print("-------------------SESSION HISTORY-----------------------")
     return history
 
@@ -179,123 +176,108 @@ def chat_engine():
             
             # Get chat history
             history = get_session_history(session_id)
-            messages = [
-                {"role": "system", "content": SYSTEM_AGENT_SIMPLE},
-                {"role": "assistant", "content": "Hello, I am your personal medical assistant. How are you feeling today?"}
-            ]
+            
+            # Initialize messages with system prompt and initial greeting if this is a new session
+            if not history.messages:
+                messages = [
+                    {"role": "system", "content": SYSTEM_AGENT_SIMPLE},
+                    {"role": "assistant", "content": "Hello, I am your personal medical assistant. How are you feeling today?"}
+                ]
+                # Save initial greeting to history
+                history.add_ai_message("Hello, I am your personal medical assistant. How are you feeling today?")
+            else:
+                messages = [{"role": "system", "content": SYSTEM_AGENT_SIMPLE}]
             
             # Add chat history
             for msg in history.messages:
-                role = "assistant" if msg.type == "ai" else "user"
-                messages.append({"role": role, "content": msg.content})
+                role = "assistant" if msg["type"] == "ai" else "user"
+                messages.append({"role": role, "content": msg["content"]})
             
             # Add current message
             messages.append({"role": "user", "content": message})
             
-            # history.add_user_message(message)
+            # Save user message to history
+            history.add_user_message(message)
             
-            try:
-                # Make API call
-                response = client.chat.completions.create(
+            # Get initial response from OpenAI
+            response = client.chat.completions.create(
+                model="gpt-4-turbo-preview",
+                messages=messages,
+                tools=self.tools,
+                tool_choice="auto"
+            )
+            
+            assistant_message = response.choices[0].message
+            patient_info = None
+            doctors_data = None
+            
+            # Save assistant's initial response to history only if it has content
+            if assistant_message.content:
+                history.add_ai_message(assistant_message.content)
+            
+            # Handle tool calls if any
+            if assistant_message.tool_calls:
+                # Add the assistant's message with tool calls first
+                messages.append({
+                    "role": "assistant",
+                    "content": assistant_message.content if assistant_message.content else "",
+                    "tool_calls": [
+                        {
+                            "id": tool_call.id,
+                            "type": "function",
+                            "function": {
+                                "name": tool_call.function.name,
+                                "arguments": tool_call.function.arguments
+                            }
+                        } for tool_call in assistant_message.tool_calls
+                    ]
+                })
+                
+                for tool_call in assistant_message.tool_calls:
+                    func_name = tool_call.function.name
+                    func_args = json.loads(tool_call.function.arguments)
+                    
+                    try:
+                        # Execute the appropriate function
+                        if func_name == "get_available_doctors_specialities":
+                            result = get_available_doctors_specialities()
+                        elif func_name == "get_doctor_by_speciality":
+                            result = get_doc_by_speciality_tool.invoke(func_args)
+                            doctors_data = result
+                        elif func_name == "store_patient_details_tool":
+                            func_args["session_id"] = session_id
+                            result = store_patient_details_tool.invoke(func_args)
+                            patient_info = result
+                            # Store patient info in session
+                            history.set_patient_data(result)
+                        
+                        # Add the tool response message
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": json.dumps(result)
+                        })
+                    except Exception as e:
+                        print(f"Error executing tool {func_name}: {str(e)}")
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": json.dumps({"error": str(e)})
+                        })
+                
+                # Get final response with tool outputs
+                final_response = client.chat.completions.create(
                     model="gpt-4-turbo-preview",
-                    messages=messages,
-                    tools=self.tools,
-                    tool_choice="auto"
+                    messages=messages
                 )
                 
-                # Process response
-                assistant_message = response.choices[0].message
-                # history.add_ai_message(assistant_message.content)
+                # Save final response to history only if it has content
+                if final_response.choices[0].message.content:
+                    history.add_ai_message(final_response.choices[0].message.content)
                 
-                # Handle tool calls if any
-                if assistant_message.tool_calls:
-                    # Add the assistant's message with the tool calls
-                    messages.append({
-                        "role": "assistant",
-                        "content": assistant_message.content if assistant_message.content else None,
-                        "tool_calls": [
-                            {
-                                "id": tool_call.id,
-                                "type": "function",
-                                "function": {
-                                    "name": tool_call.function.name,
-                                    "arguments": tool_call.function.arguments
-                                }
-                            } for tool_call in assistant_message.tool_calls
-                        ]
-                    })
-                    
-                    # Process each tool call and add their responses
-                    doctors_data = None
-                    patient_info = None
-                    
-                    for tool_call in assistant_message.tool_calls:
-                        func_name = tool_call.function.name
-                        func_args = json.loads(tool_call.function.arguments)
-                        
-                        try:
-                            # Execute the appropriate function
-                            if func_name == "get_available_doctors_specialities":
-                                result = get_available_doctors_specialities()
-                            elif func_name == "get_doctor_by_speciality":
-                                result = get_doc_by_speciality_tool.invoke(func_args)
-                                doctors_data = result
-                            elif func_name == "store_patient_details_tool":
-                                func_args["session_id"] = session_id
-                                result = store_patient_details_tool.invoke(func_args)
-                                patient_info = result
-                                # Store patient info in session
-                                history.set_patient_data(result)
-                            
-                            # Add the tool response message
-                            messages.append({
-                                "role": "tool",
-                                "tool_call_id": tool_call.id,
-                                "content": json.dumps(result)
-                            })
-                        except Exception as e:
-                            print(f"Error executing tool {func_name}: {str(e)}")
-                            messages.append({
-                                "role": "tool",
-                                "tool_call_id": tool_call.id,
-                                "content": json.dumps({"error": str(e)})
-                            })
-                    
-                    # Get final response with tool outputs
-                    final_response = client.chat.completions.create(
-                        model="gpt-4-turbo-preview",
-                        messages=messages
-                    )
-                    
-                    # Format response in the desired structure
-                    # formatted_response = {
-                    #     "response": {
-                    #         "message": final_response.choices[0].message.content.split("\n\n")[0]
-                    #     }
-                    # }
-
-                    formatted_response = {
-                        "message": final_response.choices[0].message.content.split("\n\n")[0]
-                    }
-                    
-                    # Add patient info from session if available
-                    session_patient_data = history.get_patient_data()
-                    if session_patient_data:
-                        formatted_response["patient"] = session_patient_data
-                    
-                    # Add new patient info if just collected
-                    if patient_info and patient_info != session_patient_data:
-                        formatted_response["patient"] = patient_info
-                    
-                    # Add doctors data if available
-                    if doctors_data:
-                        formatted_response["data"] = doctors_data
-                    
-                    return formatted_response
-                
-                # If no tool calls, return simple response with session patient data if available
+                # Format response in the desired structure
                 formatted_response = {
-                    "message": assistant_message.content.split("\n\n")[0]
+                      "message": final_response.choices[0].message.content.split("\n\n")[0]
                 }
                 
                 # Add patient info from session if available
@@ -303,11 +285,27 @@ def chat_engine():
                 if session_patient_data:
                     formatted_response["patient"] = session_patient_data
                 
-                return formatted_response
+                # Add new patient info if just collected
+                if patient_info and patient_info != session_patient_data:
+                    formatted_response["patient"] = patient_info
                 
-            except Exception as e:
-                print(f"Error in chat completion: {str(e)}")
-                raise e
+                # Add doctors data if available
+                if doctors_data:
+                    formatted_response["data"] = doctors_data
+                
+                return formatted_response
+            
+            # If no tool calls, return simple response with session patient data if available
+            formatted_response = {
+                    "message": assistant_message.content.split("\n\n")[0]
+            }
+            
+            # Add patient info from session if available
+            session_patient_data = history.get_patient_data()
+            if session_patient_data:
+                formatted_response["patient"] = session_patient_data
+            
+            return formatted_response
     
     return OpenAIChatEngine()
 

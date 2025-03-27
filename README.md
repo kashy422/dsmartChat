@@ -17,3 +17,9 @@ Follow the instructions on the [official Docker website](https://docs.docker.com
 >> docker-compose up --build
 >> docker-compose up --build -d # To run in detached mode
 ```
+
+## Run the uvicorn
+```commandline
+>> activate venv
+>> uvicorn src.api:app --host 0.0.0.0 --port 8507 --reload
+```
