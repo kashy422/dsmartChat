@@ -114,7 +114,7 @@ def get_doctor_name_by_speciality(speciality: str, location: str, sub_speciality
         print("++++++++++++++++++++++++++++++++++++++++++++")
 
         # Call stored procedure
-        stored_proc_query = text("EXEC GetRandomEntitiesByCriteria :speciality, :sub_speciality, :location")
+        stored_proc_query = text("EXEC draide_prod.dbo.GetRandomEntitiesByCriteria :speciality, :sub_speciality, :location")
 
         result = cursor.execute(stored_proc_query, {
             'speciality': speciality,
@@ -139,6 +139,7 @@ def get_doctor_name_by_speciality(speciality: str, location: str, sub_speciality
 
         cursor.close()
 
+        print("RECORDS: ",records)
         return records
 
     except Exception as e:

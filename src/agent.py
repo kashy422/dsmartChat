@@ -292,6 +292,9 @@ def chat_engine():
                 # Add doctors data if available
                 if doctors_data:
                     formatted_response["data"] = doctors_data
+
+                
+                print("FORMATTED RESPONSE: ", formatted_response)
                 
                 return formatted_response
             
@@ -305,6 +308,8 @@ def chat_engine():
             if session_patient_data:
                 formatted_response["patient"] = session_patient_data
             
+            print("FORMATTED RESPONSE: ", formatted_response)
+
             return formatted_response
     
     return OpenAIChatEngine()

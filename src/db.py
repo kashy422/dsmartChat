@@ -76,7 +76,7 @@ class DB:
             db_url = f"mssql+pyodbc:///?odbc_connect={params}"
             test_db_url = "mssql+pyodbc://@(localdb)\\MSSQLLocalDB/DrAide_Dev?driver=ODBC+Driver+17+for+SQL+Server&trusted_connection=yes"
 
-            self.engine = create_engine(test_db_url,pool_pre_ping=True)
+            self.engine = create_engine(db_url,pool_pre_ping=True)
 
             print("Successfully connected to the MSSQL database.")
 
@@ -137,15 +137,26 @@ class DB:
             print("location")
             print(location)
 
+            # query = text(
+            #     "SELECT TOP 5 le.Id AS DoctorId, le.DocName AS DoctorName, le.Specialty AS Speciality, le.Fee AS Fee, le.Rating AS Rating, le.HasDiscount AS HasDiscount, "
+            #     "b.BranchName AS Branch, b.Address AS Address,"
+            #     "d.DiscountType AS DiscountType, d.DiscountValue AS DiscountValue "
+            #     "FROM [ [dbo].[LowerEntity] le "
+            #     "JOIN  [dbo].[Branch] b ON le.BranchId = b.Id "
+            #     "LEFT JOIN  [dbo].[Discount] d ON le.discount_id = d.discount_id "
+            #     "WHERE le.Specialty LIKE :speciality AND b.Address LIKE :location AND le.isActive = 1;"
+            # )
+
             query = text(
-                "SELECT TOP 5 le.Id AS DoctorId, le.DocName AS DoctorName, le.Specialty AS Speciality, le.Fee AS Fee, le.Rating AS Rating, le.HasDiscount AS HasDiscount, "
-                "b.BranchName AS Branch, b.Address AS Address,"
+                "SELECT TOP 5 le.Id AS DoctorId, le.DocName_en AS DoctorName_en, le.DocName_ar AS DoctorName_ar, le.Specialty AS Speciality, le.Fee AS Fee, le.Rating AS Rating, le.HasDiscount AS HasDiscount, "
+                "b.BranchName_en AS Branch_en, b.BranchName_ar AS Branch_ar, b.Address_en AS Address_en,  b.Address_ar AS Address_ar,"
                 "d.DiscountType AS DiscountType, d.DiscountValue AS DiscountValue "
                 "FROM [ [dbo].[LowerEntity] le "
                 "JOIN  [dbo].[Branch] b ON le.BranchId = b.Id "
                 "LEFT JOIN  [dbo].[Discount] d ON le.discount_id = d.discount_id "
                 "WHERE le.Specialty LIKE :speciality AND b.Address LIKE :location AND le.isActive = 1;"
             )
+
             result = cursor.execute(query, {'speciality': f"%{speciality.value}%", 'location': f"%{location}%"})
             records = [dict(row) for row in result.mappings()]
             cursor.close()
