@@ -10,6 +10,8 @@ from enum import Enum
 import uuid
 import datetime 
 from decimal import Decimal
+import functools
+import time
 
 
 load_dotenv()
@@ -49,20 +51,40 @@ SPECIALITY_MAP = {
     "Forensic Dentistry" : "DENTISTRY"
 }
 
+# Simple cache implementation
+class Cache:
+    def __init__(self, max_size=100, ttl=600):  # 10-minute TTL by default
+        self.cache = {}
+        self.max_size = max_size
+        self.ttl = ttl
+    
+    def get(self, key):
+        if key in self.cache:
+            value, timestamp = self.cache[key]
+            if time.time() - timestamp < self.ttl:
+                return value
+            else:
+                # Expired entry
+                del self.cache[key]
+        return None
+    
+    def set(self, key, value):
+        # Implement LRU eviction if needed
+        if len(self.cache) >= self.max_size:
+            # Remove oldest item (simple approach)
+            oldest_key = next(iter(self.cache))
+            del self.cache[oldest_key]
+        
+        self.cache[key] = (value, time.time())
+
 class DB:
     def __init__(self):
         self.__connect()
+        self.cache = Cache()
 
     def __connect(self):
         try:
             # Establish the connection
-            # self.connection = pymysql.connect(
-            #     host=os.environ.get('DB_HOST'),
-            #     user=os.environ.get('DB_USER'),
-            #     password=os.environ.get('DB_PASSWORD'),
-            #     database=os.environ.get('DB_DATABASE'),
-            #     cursorclass=pymysql.cursors.DictCursor
-            # )
             params = urllib.parse.quote_plus(
                   f"DRIVER={{ODBC Driver 17 for SQL Server}};"
                   f"SERVER={os.environ.get('DB_HOST')};"
@@ -74,11 +96,22 @@ class DB:
 
             # SQLAlchemy connection string
             db_url = f"mssql+pyodbc:///?odbc_connect={params}"
-            test_db_url = "mssql+pyodbc://@(localdb)\\MSSQLLocalDB/DrAide_Dev?driver=ODBC+Driver+17+for+SQL+Server&trusted_connection=yes"
+            
+            # Configure connection pooling for better performance
+            # pool_size: max number of connections kept in the pool
+            # max_overflow: max number of connections created beyond pool_size
+            # pool_timeout: seconds before giving up getting a connection from the pool
+            # pool_recycle: recycle connections after this many seconds, preventing stale connections
+            self.engine = create_engine(
+                db_url,
+                pool_pre_ping=True,  # Validates connections before using them
+                pool_size=10,
+                max_overflow=20,
+                pool_timeout=30,
+                pool_recycle=1800  # Recycle connections after 30 minutes
+            )
 
-            self.engine = create_engine(db_url,pool_pre_ping=True)
-
-            print("Successfully connected to the MSSQL database.")
+            print("Successfully connected to the MSSQL database with connection pooling.")
 
         except SQLAlchemyError as e:
             print(e)
@@ -119,7 +152,17 @@ class DB:
 
             
     def get_doctor_name_by_speciality(self, speciality: SpecialityEnum, location: str) -> list[dict[str, str | int | float | bool]]:
+        # Create a cache key
+        cache_key = f"{speciality.value}:{location}"
+        
+        # Check if result is in cache
+        cached_result = self.cache.get(cache_key)
+        if cached_result is not None:
+            logger.info(f"Cache hit for {cache_key}")
+            return cached_result
+        
         try:
+            start_time = time.time()
             cursor = self.engine.connect()
             # query = text(
             #     "select TOP 5 EntityName as DoctorName, OverallPercentage as Rating, BasicContactCity as City, MainSpecialtyName as Speciality, "
@@ -160,6 +203,12 @@ class DB:
             result = cursor.execute(query, {'speciality': f"%{speciality.value}%", 'location': f"%{location}%"})
             records = [dict(row) for row in result.mappings()]
             cursor.close()
+            
+            # Store in cache
+            self.cache.set(cache_key, records)
+            
+            query_time = time.time() - start_time
+            logger.info(f"Database query took {query_time:.2f} seconds")
 
             return records
         except Exception as e:

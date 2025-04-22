@@ -1,5 +1,5 @@
 from langchain_core.tools import tool, StructuredTool
-from langchain.pydantic_v1 import BaseModel, Field
+from pydantic import BaseModel, Field
 from enum import Enum
 from typing import List, Optional, Union
 
@@ -7,6 +7,8 @@ from sqlalchemy import text
 from .db import DB
 import re
 from decimal import Decimal
+import time
+from functools import wraps
 
 
 db = DB()
@@ -66,80 +68,113 @@ def get_doctor_name_by_speciality(speciality: str, location: str, sub_speciality
     Ensures speciality, sub-speciality (if detected), and location are passed correctly.
     """
     try:
-        cursor = db.engine.connect()
-
-
-        print("++++++++++++++++++++++++++++++++++++++++++++")
-        print("BEFORE")
-        print("SPECIALTY: ", speciality)
-        print("SUB SPECIALTY: ",sub_speciality)
-        print("+++++++++++++++++++++++++++++++++++++++++++++++")
-
-
-        if speciality == "Dentist" :
-            speciality = "DENTISTRY"
-        elif speciality == "Dentistry":
-            speciality = "DENTISTRY"
+        print("INITIAL INPUTS:", 
+              f"speciality='{speciality}'", 
+              f"location='{location}'", 
+              f"sub_speciality='{sub_speciality}'")
+        
+        # Normalize inputs before database query
         # Normalize speciality
         speciality = speciality.strip() if speciality else ""
+        
+        # Fast path for common cases
+        if speciality.lower() in ["dentist", "dentistry"]:
+            speciality = "DENTISTRY"
+            
+        # Make specialty uppercase for consistency
+        if speciality:
+            speciality = speciality.upper()
 
-         # Ensure that speciality comes from `SPECIALITY_MAP`
-        if speciality in SPECIALITY_MAP:
-            mapped_speciality = SPECIALITY_MAP[speciality]
-            if speciality not in SPECIALITY_MAP.values():
-                speciality, sub_speciality = mapped_speciality, speciality  # Move original speciality to sub-speciality
+        # Handle common specialty synonyms
+        specialty_mapping = {
+            "DENTAL": "DENTISTRY",
+            "TEETH": "DENTISTRY", 
+            "TOOTH": "DENTISTRY",
+            "HEART": "CARDIOLOGY",
+            "CARDIAC": "CARDIOLOGY",
+            "BONES": "ORTHOPEDICS", 
+            "JOINT": "ORTHOPEDICS",
+            "SKIN": "DERMATOLOGY"
+        }
+        
+        if speciality in specialty_mapping:
+            speciality = specialty_mapping[speciality]
 
-        # If sub_speciality is a list, convert to a comma-separated string
-        if isinstance(sub_speciality, list):
-            sub_speciality = ', '.join(set([s.strip() for s in sub_speciality if s]))  # Clean and remove duplicates
-        elif isinstance(sub_speciality, str):
-            # Normalize existing string (remove extra spaces)
-            sub_speciality = ', '.join(set([s.strip() for s in sub_speciality.split(',') if s.strip()]))
-
-        # Default sub-speciality if empty
-        if not sub_speciality and speciality == "DENTISTRY":
-            sub_speciality = "General Dentist"
-
-        # Ensure `sub_speciality` contains only values from `SPECIALITY_MAP`
+        # Process subspecialty information
         if sub_speciality:
-            valid_sub_specialities = [s for s in sub_speciality.split(', ') if s in SPECIALITY_MAP]
-            sub_speciality = ', '.join(valid_sub_specialities) if valid_sub_specialities else None
+            # Clean and normalize subspecialty
+            sub_speciality = sub_speciality.strip()
+            
+            # Special case: Check if it's "General Dentist"
+            if sub_speciality.lower() == "general dentist":
+                speciality = "DENTISTRY"
+                # Leave subspecialty as None for General Dentist
+                sub_speciality = None
+                print("Setting subspecialty to None for General Dentist")
+            # Check if it's one of our mapped subspecialties
+            elif sub_speciality in SPECIALITY_MAP:
+                # Get the main specialty for this subspecialty
+                mapped_specialty = SPECIALITY_MAP[sub_speciality]
+                
+                # If user-specified specialty doesn't match the mapped one, 
+                # use the mapped specialty for consistency
+                if speciality and speciality != mapped_specialty:
+                    print(f"Overriding user specialty '{speciality}' with mapped specialty '{mapped_specialty}' based on subspecialty")
+                    
+                speciality = mapped_specialty
+            else:
+                # Try to find closest match among subspecialties
+                sub_speciality_lower = sub_speciality.lower()
+                match_found = False
+                for known_sub in SPECIALITY_MAP.keys():
+                    if known_sub.lower() in sub_speciality_lower or sub_speciality_lower in known_sub.lower():
+                        print(f"Replacing subspecialty '{sub_speciality}' with known subspecialty '{known_sub}'")
+                        sub_speciality = known_sub
+                        speciality = SPECIALITY_MAP[known_sub]
+                        match_found = True
+                        break
+                
+                # If no match found and we have a speciality, check if we should clear the subspecialty
+                if not match_found and speciality:
+                    print(f"Unrecognized subspecialty '{sub_speciality}' with specialty '{speciality}', using general specialty")
+                    sub_speciality = None
+                        
+        # Default sub-speciality if empty for dentistry - but let's keep it None for API call
+        default_subspecialty = None
+        if speciality == "DENTISTRY" and not sub_speciality:
+            default_subspecialty = "General Dentist"
+            print(f"Using default subspecialty for DENTISTRY: {default_subspecialty} (but keeping None for API)")
 
+        # Get database connection - reusing connection from db module
+        cursor = db.engine.connect()
 
-
-        print("++++++++++++++++++++++++++++++++++++++++++++")
-        print("AFTER")
-        print("SPECIALTY: ", speciality)
-        print("SUB SPECIALTY: ",sub_speciality)
-        print("++++++++++++++++++++++++++++++++++++++++++++")
-
-        # Call stored procedure
+        # Call stored procedure with final parameters
+        print(f"Executing query with: speciality={speciality}, sub_speciality={sub_speciality}, location={location}")
         stored_proc_query = text("EXEC draide_prod.dbo.GetRandomEntitiesByCriteria :speciality, :sub_speciality, :location")
-
+        
+        # Execute query with params
         result = cursor.execute(stored_proc_query, {
             'speciality': speciality,
             'sub_speciality': sub_speciality,
             'location': location
         })
-        print("++++++++++++++++++++++++++ DONE ++++++++++++++++++++++")
+        
+        # Process results efficiently
         def convert_decimals(obj):
-            if isinstance(obj, list):
-                return [convert_decimals(i) for i in obj]
-            elif isinstance(obj, dict):
-                return {k: convert_decimals(v) for k, v in obj.items()}
-            elif isinstance(obj, Decimal):
-                return float(obj)
+            if isinstance(obj, dict):
+                return {k: float(v) if isinstance(v, Decimal) else v for k, v in obj.items()}
             return obj
-        print("++++++++++++++++++++++++++ OK ++++++++++++++++++++++")
+            
         records = [convert_decimals(dict(row)) for row in result.mappings()]
-
-        # Fetch and return results
-        # records = [dict(row) for row in result.mappings()]
-
-
         cursor.close()
-
-        print("RECORDS: ",records)
+        
+        print(f"Query returned {len(records)} doctor records")
+        
+        # Don't modify the response structure for frontend compatibility
+        # Just log what was detected for debugging purposes
+        if speciality == "DENTISTRY" and not sub_speciality:
+            print(f"Debug: Using DENTISTRY with no subspecialty (general dentist implied)")
+        
         return records
 
     except Exception as e:
@@ -327,51 +362,86 @@ get_doc_by_speciality_tool = StructuredTool.from_function(
 
 def detect_speciality_subspeciality(user_input: str) -> tuple[Optional[str], Optional[str]]:
     """
-    Detects speciality and sub-speciality from the user input.
-    - Assumes input is in English (no translation or language detection).
-    - Matches sub-speciality first, then maps to main speciality using `SPECIALITY_MAP`.
-    - Returns (speciality, sub_speciality).
+    Improved detection of speciality and sub-speciality from user symptoms.
+    Uses a combination of:
+    1. Direct symptom matching against the SYMPTOM_TO_SPECIALITY dictionary
+    2. Sub-speciality name detection in the input text
+    3. Fallback to general speciality detection
+    
+    Returns a tuple of (speciality, sub_speciality)
     """
-    print("||-----------------------------------------------------")
+    if not user_input:
+        return None, None
+        
+    # Normalize input text: remove punctuation, convert to lowercase
+    normalized_input = re.sub(r'[^\w\s]', ' ', user_input.lower())
+    words = set(normalized_input.split())
     
-    print("user_input",user_input)
-    # Normalize input: remove punctuation and convert to lowercase
-    normalized_input = re.sub(r'[^\w\s]', '', user_input)
+    print(f"Processing symptoms: {normalized_input}")
     
-    print(normalized_input)
-    print("||-----------------------------------------------------")
-    detected_sub_speciality = None
-    detected_speciality = None
-
-    # Check for sub-speciality first
-    for sub_speciality, speciality in SPECIALITY_MAP.items():
-        print(1)
-        if sub_speciality.lower() in normalized_input:
-            print(2)
-            detected_sub_speciality = sub_speciality
-            print(3)
-            detected_speciality = speciality
-            break  # Stop once we find a match
-
-    # If no sub-speciality detected, check for main speciality
-    if not detected_speciality:
-        unique_specialities = set(SPECIALITY_MAP.values())  # Get unique specialities
-        print(20)
-        for speciality in unique_specialities:
-            print(21)
-            if speciality.lower() in normalized_input:
-                print(22)
-                detected_speciality = speciality
-                break  # Stop once we find a match
-
+    # Check for general dentist first - this has special handling
+    if "general dentist" in normalized_input:
+        print("Detected 'general dentist' explicitly in input - using DENTISTRY with no subspecialty")
+        return "DENTISTRY", None
     
-    print("-----------------------------------------------------")
-    print(detected_speciality)
-    print(detected_sub_speciality)
-    print("-----------------------------------------------------")
+    # 1. Symptom-based matching (most accurate)
+    detected_symptoms = []
+    potential_subspecialties = {}
     
-    #detected_sub_speciality = None
-    return detected_speciality, detected_sub_speciality
+    # Search for known symptoms in the input
+    for symptom, subspecialty in SYMPTOM_TO_SPECIALITY.items():
+        # Check if all words in the symptom appear in the input
+        symptom_lower = symptom.lower()
+        symptom_words = set(re.sub(r'[^\w\s]', ' ', symptom_lower).split())
+        
+        # Check for partial matches - at least 60% of the symptom words should match
+        matching_words = words.intersection(symptom_words)
+        if len(matching_words) >= max(1, len(symptom_words) * 0.6):
+            detected_symptoms.append(symptom)
+            # Count occurrences to find most relevant subspecialty
+            potential_subspecialties[subspecialty] = potential_subspecialties.get(subspecialty, 0) + 1
+    
+    print(f"Detected symptoms: {detected_symptoms}")
+    print(f"Potential subspecialties by symptom: {potential_subspecialties}")
+    
+    # If we found symptoms, find the most likely subspecialty
+    if potential_subspecialties:
+        # Find subspecialty with most symptom matches
+        best_subspecialty = max(potential_subspecialties.items(), key=lambda x: x[1])[0]
+        
+        # Special case: if it's "General Dentist", return DENTISTRY with no subspecialty
+        if best_subspecialty.lower() == "general dentist":
+            return "DENTISTRY", None
+            
+        # Map to main specialty
+        for sub, main in SPECIALITY_MAP.items():
+            if sub == best_subspecialty:
+                return main, best_subspecialty
+    
+    # 2. Direct subspecialty name detection (medium accuracy)
+    for subspecialty in SPECIALITY_MAP.keys():
+        subspecialty_lower = subspecialty.lower()
+        # Check if the subspecialty name appears in the input
+        if subspecialty_lower in normalized_input:
+            if subspecialty_lower == "general dentist":
+                return "DENTISTRY", None
+            main_specialty = SPECIALITY_MAP[subspecialty]
+            return main_specialty, subspecialty
+    
+    # 3. Fallback to main specialty detection (lowest accuracy)
+    unique_specialties = set(SPECIALITY_MAP.values())
+    for specialty in unique_specialties:
+        if specialty.lower() in normalized_input:
+            return specialty, None
+    
+    # 4. Secondary fallback to partial symptom matching
+    if normalized_input:
+        # Try to match based on common terms
+        dental_terms = {'tooth', 'teeth', 'gum', 'dental', 'mouth', 'bite', 'jaw', 'chew'}
+        if any(term in words for term in dental_terms):
+            return "DENTISTRY", None
+    
+    return None, None
     
 
 # def store_patient_details(Name:str,Gender:str,Address:str,Issue:str,Contact:str,Email:str) -> list[dict[str, str | int | float | bool]]:
@@ -386,14 +456,41 @@ def store_patient_details(
     session_id: Optional[str] = None  # Add session_id as an optional argument
 ) -> dict:
     """Store the information of a patient with default values for missing fields."""
-    patient_info = {
-        "Name": Name or None,
-        "Gender": Gender or None,
-        "Location": Location or None,
-        "Issue": Issue or None,
-        "session_id": session_id  # Include session_id in the patient info
-    }
-    print("Storing patient info:", patient_info)  # Debugging statement
+    # Validate location - ensure it's not empty if provided
+    if Location is not None and Location.strip() == "":
+        Location = None
+        print("Warning: Empty location provided, setting to None")
+    
+    # Create patient info with validated fields - preserve existing fields
+    patient_info = {}
+    
+    # If this is an update, get existing data first
+    if session_id:
+        from .agent import get_session_history
+        history = get_session_history(session_id)
+        existing_data = history.get_patient_data()
+        if existing_data:
+            # Start with existing data
+            patient_info = dict(existing_data)
+            print(f"Found existing patient data for session {session_id}")
+    
+    # Update with new values, only if provided
+    if Name is not None:
+        patient_info["Name"] = Name
+    if Gender is not None:
+        patient_info["Gender"] = Gender
+    if Location is not None:
+        patient_info["Location"] = Location
+    if Issue is not None:
+        patient_info["Issue"] = Issue
+    
+    # Always include session_id
+    patient_info["session_id"] = session_id
+    
+    # Log for debugging
+    print(f"Storing patient info: Name={'Name' in patient_info}, Gender={'Gender' in patient_info}, " +
+          f"Location={'Location' in patient_info}, Issue_length={len(patient_info.get('Issue', '')) if 'Issue' in patient_info else 0}")
+    
     return patient_info
 
 
@@ -406,3 +503,54 @@ store_patient_details_tool = StructuredTool.from_function(
     return_direct=False,
     handle_tool_error="Patient Details Incomplete",
 )
+
+# Simple profiling decorator
+def profile(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        elapsed_time = time.time() - start_time
+        print(f"Function {func.__name__} took {elapsed_time:.2f} seconds to run")
+        return result
+    return wrapper
+
+@tool(return_direct=False)
+def find_doctors_by_speciality(args=None) -> list[dict[str, str | int | float | bool]]:
+    """
+    Fetch doctors by speciality, location, and sub-speciality from the database.
+    The function detects speciality from patient's symptoms if speciality is not provided.
+    """
+    start_time = time.time()
+    
+    if args is None:
+        print("Warning: find_doctors_by_speciality called with no arguments")
+        return []
+    
+    # Handle both dict input and object input
+    if isinstance(args, dict):
+        speciality = args.get("speciality")
+        location = args.get("location")
+        sub_speciality = args.get("sub_speciality")
+    else:
+        # Object input (from LangChain)
+        speciality = args.speciality
+        location = args.location
+        sub_speciality = args.sub_speciality
+    
+    print(f"Processing doctor search: speciality={speciality}, location={location}, sub_speciality={sub_speciality}")
+    
+    processing_time = time.time() - start_time
+    print(f"Args processing took {processing_time:.4f} seconds")
+    
+    # Call the database function with profiling to time the operation
+    query_start = time.time()
+    doctors = get_doctor_name_by_speciality(speciality, location, sub_speciality)
+    query_time = time.time() - query_start
+    print(f"Database query took {query_time:.4f} seconds")
+    
+    # Format results for efficient serialization to JSON
+    total_time = time.time() - start_time
+    print(f"Total find_doctors_by_speciality execution time: {total_time:.4f} seconds")
+    
+    return doctors

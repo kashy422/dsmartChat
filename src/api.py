@@ -1,6 +1,7 @@
 import tempfile
 import os
-from fastapi import FastAPI, UploadFile, File, HTTPException,Form
+import time
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from io import BytesIO
@@ -75,6 +76,8 @@ async def chat(
     session_id: str = Form(...),
     audio: UploadFile = File(None)
 ):
+    start_time = time.time()
+    
     # Split and validate session_id
     try:
         split_text = session_id.split('|')
@@ -85,6 +88,7 @@ async def chat(
 
     # Check if an audio file is provided
     if audio:
+        audio_processing_start = time.time()
         # Log the MIME type for diagnostic purposes
         print(f"Received audio MIME type: {audio.content_type}")
 
@@ -100,41 +104,60 @@ async def chat(
         
         # Use OpenAI's Whisper model to transcribe the audio file
         try:
+            transcription_start = time.time()
             with open(temp_file_path, "rb") as audio_file:
                 transcription = client.audio.transcriptions.create(
                     model="whisper-1", 
                     file=audio_file,
                     response_format="text"
                 )
-            print("Transcription:", transcription)  # Debugging step, check transcription output
+            transcription_time = time.time() - transcription_start
+            print(f"Transcription took {transcription_time:.2f}s")
         
             # Process the transcription result
+            process_start = time.time()
             response = process_message(transcription, session_id=split_text[1])
+            processing_time = time.time() - process_start
+            
+            # Collect performance metrics
+            audio_processing_time = time.time() - audio_processing_start
+            total_time = time.time() - start_time
             
             # If callBackHandler has docs_data, return the data and clear it
             if callBackHandler.docs_data:
                 response_data = {
-                    "response": callBackHandler.docs_data  # Return the custom doctor data
+                    "response": callBackHandler.docs_data,
+                    "performance": {
+                        "total_time": round(total_time, 2),
+                        "audio_processing_time": round(audio_processing_time, 2),
+                        "transcription_time": round(transcription_time, 2),
+                        "processing_time": round(processing_time, 2)
+                    }
                 }
                 callBackHandler.docs_data = []  # Clear the data after it's returned
                 return response_data
             
+            # Generate TTS if needed
+            tts_start = time.time()
+            audio_base64 = await text_to_speech(response['response']['message'])
+            tts_time = time.time() - tts_start
+            
             # If no docs_data, return the normal engine response along with audio base64
             return {
                 "response": {
-                    "message": response['response']['message'],  # Updated to use new structure
+                    "message": response['response']['message'],
                     "transcription": transcription,
-                    "Audio_base_64": await text_to_speech(response['response']['message'])  # Using AWS Polly
+                    "Audio_base_64": audio_base64
+                },
+                "performance": {
+                    "total_time": round(total_time, 2),
+                    "audio_processing_time": round(audio_processing_time, 2),
+                    "transcription_time": round(transcription_time, 2),
+                    "processing_time": round(processing_time, 2),
+                    "tts_time": round(tts_time, 2)
                 }
             }
 
-            # return {
-            #     "response": {
-            #         "message": response['message'],  # Updated to use new structure
-            #         "transcription": transcription,
-            #         "Audio_base_64": await text_to_speech(response['message'])  # Using AWS Polly
-            #     }
-            # }
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error transcribing audio: {str(e)}")
         finally:
@@ -145,18 +168,32 @@ async def chat(
     # Process the request as a text message if no audio file is provided
     if message:
         # Process the message and generate a response
+        process_start = time.time()
         response = process_message(message, session_id=split_text[1])
+        processing_time = time.time() - process_start
+        total_time = time.time() - start_time
         
         # If callBackHandler has docs_data, return the data and clear it
         if callBackHandler.docs_data:
             response_data = {
-                "response": callBackHandler.docs_data  # Return the custom doctor data
+                "response": callBackHandler.docs_data,
+                "performance": {
+                    "total_time": round(total_time, 2),
+                    "processing_time": round(processing_time, 2)
+                }
             }
             callBackHandler.docs_data = []  # Clear the data after it's returned
             return response_data
         
+        # Include processing time in the response
+        response_with_metrics = response
+        response_with_metrics["performance"] = {
+            "total_time": round(total_time, 2),
+            "processing_time": round(processing_time, 2)
+        }
+        
         # Return the response as is since it's already in the correct format
-        return response
+        return response_with_metrics
     
     # If neither audio nor message is provided, raise an error
     raise HTTPException(status_code=400, detail="Either a message or an audio file must be provided.")
@@ -219,8 +256,15 @@ def reset():
 
 
 def process_message(message: str, session_id: str) -> dict["str", "str"]:
-    thread_local.session_id = session_id  
+    thread_local.session_id = session_id
+    
+    start_time = time.time()  # Start timing
+    
     try:
+        print(f"Processing message for session {session_id}")
+        
+        # Time the AI invocation
+        invoke_start = time.time()
         response = engine.invoke(
             {"input": message, "session_id": session_id},
             config={
@@ -228,13 +272,21 @@ def process_message(message: str, session_id: str) -> dict["str", "str"]:
                 "callbacks": [callBackHandler]
             }
         )
-
+        invoke_time = time.time() - invoke_start
+        
+        # Calculate total processing time
+        total_time = time.time() - start_time
+        
+        # Log performance metrics
+        print(f"Performance metrics - Total: {total_time:.2f}s, AI invoke: {invoke_time:.2f}s")
+        
         if '</EXIT>' in str(response):
             engine.history_messages_key = []
 
-        return {"response": response}
+        return {"response": response, "processing_time": total_time}
     except Exception as e:
-        print(f"Error in process_message: {str(e)}")
+        error_time = time.time() - start_time
+        print(f"Error in process_message after {error_time:.2f}s: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
