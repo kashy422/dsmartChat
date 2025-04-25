@@ -19,6 +19,7 @@ from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_openai import ChatOpenAI
 from openai import OpenAI
 from typing import Optional
+import time
 
 from .agent_tools import (
     get_available_doctors_specialities, 
@@ -183,33 +184,8 @@ def chat_engine():
             # Get chat history
             history = get_session_history(session_id)
             
-            # Extract patient info from conversation before processing
-            # Only do this if we don't already have complete patient info
-            existing_patient_info = history.get_patient_data() or {}
-            
-            # Auto-extract patient information from the conversation if needed
-            # Modified: More aggressive extraction to ensure we capture all available info
-            extracted_info = extract_patient_info_from_conversation(history, message)
-            
-            if extracted_info:
-                print(f"Extracted patient info: {extracted_info}")
-                
-                # Merge with existing info, giving priority to new data for missing fields
-                patient_info = {**existing_patient_info}
-                
-                # Add new fields or update incomplete ones
-                for key, value in extracted_info.items():
-                    if key not in patient_info or not patient_info[key]:
-                        patient_info[key] = value
-                        print(f"Adding/updating {key}: {value}")
-                
-                # Add session ID
-                patient_info["session_id"] = session_id
-                
-                # Only update if we actually found something new
-                if patient_info != existing_patient_info:
-                    print("Updating patient info from conversation extraction")
-                    history.set_patient_data(patient_info)
+            # Get patient data to ensure consistent location use
+            patient_data = history.get_patient_data() or {}
             
             # Prepare messages more efficiently by building the list once
             messages = [{"role": "system", "content": SYSTEM_AGENT_SIMPLE}]
@@ -349,7 +325,13 @@ def chat_engine():
                                 print(f"Final search parameters: speciality={speciality}, location={location}, sub_speciality={sub_speciality}")
                                 
                                 # Direct call to database function
-                                result = get_doctor_name_by_speciality(speciality, location, sub_speciality)
+                                if(not speciality or speciality == "") and (not sub_speciality or sub_speciality == ""):
+                                    print("No speciality or subspeciality provided - using patient data")
+                                    result = {
+                                        "message" : "We dont have doctors for this issue."
+                                    }
+                                else:
+                                    result = get_doctor_name_by_speciality(speciality, location, sub_speciality)
                                 
                                 # Log helpful hints for the AI to display results properly
                                 if result and isinstance(result, list) and len(result) > 0:
@@ -399,26 +381,21 @@ def chat_engine():
                             # Store patient info in session
                             history.set_patient_data(result)
                             
-                            # If we have both Issue and Location, suggest immediate doctor search with detected specialty
+                            # If we have both Issue and Location, force OpenAI to execute doctor search in next turn
                             issue = func_args.get("Issue")
                             location = func_args.get("Location")
                             
                             if issue and location and len(issue) > 5 and len(location) > 1:
                                 detected_specialty, detected_subspecialty = detect_speciality_subspeciality(issue)
                                 
-                                if detected_specialty:
-                                    # Recommend immediate doctor search based on detected specialty
-                                    doctor_suggestion = {
-                                        "detected_info": {
-                                            "specialty": detected_specialty,
-                                            "subspecialty": detected_subspecialty,
-                                            "location": location
-                                        },
-                                        "suggestion": f"Based on the patient's symptoms, they should see a {detected_subspecialty or detected_specialty} specialist. Consider immediately searching for doctors with get_doctor_by_speciality."
-                                    }
-                                    # Add the suggestion to the result
-                                    result["detected_specialist"] = doctor_suggestion
-                                    print(f"RECOMMENDATION: Based on patient's symptoms, suggest immediate search for {detected_subspecialty or detected_specialty} doctors in {location}")
+                                # Save detected values for automatic prompting in next response
+                                if detected_specialty or detected_subspecialty:
+                                    # Add a flag to the result indicating that doctor search should be executed next
+                                    print(f"Detected specialty={detected_specialty}, subspecialty={detected_subspecialty}")
+                                    result["_detected_specialty"] = detected_specialty
+                                    result["_detected_subspecialty"] = detected_subspecialty
+                                    result["_detected_location"] = location
+                                    result["_should_search_doctors"] = True
                         else:
                             # Unknown tool
                             result = {"error": f"Unknown tool: {func_name}"}
@@ -447,13 +424,35 @@ def chat_engine():
                 # Get response content efficiently
                 response_content = final_response.choices[0].message.content
                 
+                # Check if we should auto-trigger doctor search
+                auto_search_doctors = False
+                doctor_search_params = {}
+                
+                # Check if patient_info contains doctor search flags
+                if patient_info and patient_info.get("_should_search_doctors", False):
+                    auto_search_doctors = True
+                    doctor_search_params = {
+                        "speciality": patient_info.get("_detected_specialty", ""),
+                        "location": patient_info.get("_detected_location", ""),
+                        "sub_speciality": patient_info.get("_detected_subspecialty", "")
+                    }
+                    
+                    # Clean up the flags from patient_info
+                    for key in ["_should_search_doctors", "_detected_specialty", "_detected_subspecialty", "_detected_location"]:
+                        if key in patient_info:
+                            del patient_info[key]
+                
                 # Save final response to history only if it has content
                 if response_content:
+                    # If we're going to auto-search, modify the response
+                    if auto_search_doctors:
+                        response_content = "I've saved your information. Let me find doctors for you..."
+                    
                     history.add_ai_message(response_content)
                 
                 # Build response object efficiently
                 formatted_response = {
-                    "message": response_content.split("\n\n")[0]
+                    "message": response_content
                 }
                 
                 # Add patient data efficiently
@@ -463,8 +462,34 @@ def chat_engine():
                 elif patient_info:
                     formatted_response["patient"] = patient_info
                 
-                # Add doctors data if available
-                if doctors_data:
+                # If auto-searching doctors, do that now and modify the response
+                if auto_search_doctors:
+                    try:
+                        # Get doctor results
+                        specialty = doctor_search_params.get("speciality", "")
+                        location = doctor_search_params.get("location", "")
+                        subspecialty = doctor_search_params.get("sub_speciality", "")
+                        
+                        print(f"Auto-searching for doctors: specialty={specialty}, location={location}, subspecialty={subspecialty}")
+                        
+                        # Call the function directly
+                        doctor_results = get_doctor_name_by_speciality(specialty, location, subspecialty)
+                        
+                        # Add doctors to response
+                        formatted_response["data"] = doctor_results
+                        
+                        # Update message to reflect search results
+                        if doctor_results and isinstance(doctor_results, list) and len(doctor_results) > 0:
+                            formatted_response["message"] = f"I've found {len(doctor_results)} doctors that may be able to help with your issue."
+                        else:
+                            formatted_response["message"] = "I couldn't find any doctors matching your requirements. Would you like to try a different specialty or location?"
+                        
+                    except Exception as e:
+                        print(f"Error in auto doctor search: {str(e)}")
+                        # Keep original response if error occurs
+                
+                # Add doctors data if available from normal flow
+                elif doctors_data:
                     # If doctors_data has patient_data, extract it first
                     if isinstance(doctors_data, dict) and "patient_data" in doctors_data:
                         patient_data = doctors_data.pop("patient_data", None)
@@ -483,19 +508,19 @@ def chat_engine():
                     
                     # Always ensure patient data is included with doctor results if available
                     # Recheck for patient data to ensure it's included
-                    if "patient" not in formatted_response:
-                        session_patient_data = history.get_patient_data()
-                        if session_patient_data:
-                            formatted_response["patient"] = session_patient_data
-                            print("Added patient data from session to doctor results")
-                        else:
-                            # Extract patient data from conversation as a last resort
-                            extracted_info = extract_patient_info_from_conversation(history)
-                            if extracted_info and len(extracted_info) > 0:
-                                formatted_response["patient"] = extracted_info
-                                # Also update the session history
-                                history.set_patient_data(extracted_info)
-                                print("Added freshly extracted patient data to response")
+                    # if "patient" not in formatted_response:
+                    #     session_patient_data = history.get_patient_data()
+                    #     if session_patient_data:
+                    #         formatted_response["patient"] = session_patient_data
+                    #         print("Added patient data from session to doctor results")
+                    #     else:
+                    #         # Extract patient data from conversation as a last resort
+                    #         extracted_info = extract_patient_info_from_conversation(history)
+                    #         if extracted_info and len(extracted_info) > 0:
+                    #             formatted_response["patient"] = extracted_info
+                    #             # Also update the session history
+                    #             history.set_patient_data(extracted_info)
+                    #             print("Added freshly extracted patient data to response")
                 
                 # Final debug check on full response structure
                 print(f"Response structure keys: {formatted_response.keys()}")
@@ -503,8 +528,12 @@ def chat_engine():
                 return formatted_response
             
             # If no tool calls, return simple response with session patient data if available
+            # formatted_response = {
+            #     "message": assistant_message.content.split("\n\n")[0]
+            # }
+
             formatted_response = {
-                "message": assistant_message.content.split("\n\n")[0]
+                "message": assistant_message.content
             }
             
             # Add patient info from session if available

@@ -145,6 +145,8 @@ def get_doctor_name_by_speciality(speciality: str, location: str, sub_speciality
             default_subspecialty = "General Dentist"
             print(f"Using default subspecialty for DENTISTRY: {default_subspecialty} (but keeping None for API)")
 
+        if speciality == "" :
+            speciality = None
         # Get database connection - reusing connection from db module
         cursor = db.engine.connect()
 
@@ -211,6 +213,8 @@ SYMPTOM_TO_SPECIALITY = {
     "Tooth discoloration" : "Endodontics",
     "Bad breath" : "Endodontics",
     "Inability to chew" : "Endodontics",
+
+    "Toothache" : "Endodontics",
 
     "Bleeding during brushing": "Periodontics",
     "Gum redness": "Periodontics",
