@@ -27,10 +27,11 @@ from .agent_tools import (
     store_patient_details_tool,
     store_patient_details,
     GetDoctorsBySpecialityInput,
-    detect_speciality_subspeciality
+    detect_speciality_subspeciality,
+    search_doctors_dynamic
 )
 from .common import write
-from .consts import SYSTEM_AGENT_SIMPLE
+from .consts import SYSTEM_AGENT_ENHANCED
 from .utils import CustomCallBackHandler
 from enum import Enum
 
@@ -46,6 +47,7 @@ class ChatHistory:
     def __init__(self):
         self.messages = []
         self.patient_data = None  # Add patient data storage
+        self.temp_search_criteria = None
     
     def add_user_message(self, content: str):
         self.messages.append({"type": "human", "content": content})
@@ -113,60 +115,62 @@ def chat_engine():
             {
                 "type": "function",
                 "function": {
-                    "name": "get_doctor_by_speciality",
-                    "description": "Get doctors by speciality and location. ALWAYS use this tool immediately after identifying a patient's medical issue to show available doctors. Location is MANDATORY - always ask the patient for their preferred location before calling this tool. If only symptoms are known, the system will detect the appropriate medical specialty.",
+                    "name": "search_doctors_dynamic",
+                    "description": """
+                    Primary function to search for doctors using natural language queries. Can search by:
+                    - Doctor name (in English or Arabic)
+                    - Hospital/Clinic name (in English or Arabic)
+                    - Branch name (in English or Arabic)
+                    - Specialty and subspecialty
+                    - Location (with radius search in km)
+                    - Fee range (cheapest, most expensive, between X and Y)
+                    - Rating
+                    Example queries:
+                    - "Find cardiologists in Riyadh within 5km of current location"
+                    - "Show me doctors at Mayo Clinic with rating above 4"
+                    - "Find pediatricians charging less than 300"
+                    - "Find an orthopedic doctor named Dr. Ahmed"
+                    - "Show me all doctors in Al Olaya branch"
+                    - "Show me the cheapest dentists in Riyadh"
+                    - "Find doctors between 100 and 400 SAR"
+                    """,
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "speciality": {
+                            "user_message": {
                                 "type": "string",
-                                "description": "Medical speciality (e.g., DENTISTRY, CARDIOLOGY). Can be left empty if symptoms are provided and system should detect."
-                            },
-                            "location": {
-                                "type": "string",
-                                "description": "REQUIRED: Location/city name where the patient wants to find doctors. Must always be provided and never assumed."
-                            },
-                            "sub_speciality": {
-                                "type": "string",
-                                "description": "Optional sub-speciality of the doctor (e.g., Orthodontics, Endodontics). Can be left empty if symptoms are provided and system should detect.",
-                                "optional": True
-                            },
-                            "symptoms": {
-                                "type": "string",
-                                "description": "Optional detailed description of patient's symptoms to help identify the appropriate specialist if speciality is unknown",
-                                "optional": True
+                                "description": "The user's search request in natural language"
                             }
                         },
-                        "required": ["location"]
+                        "required": ["user_message"]
                     }
                 }
             },
             {
                 "type": "function",
                 "function": {
-                    "name": "store_patient_details_tool",
-                    "description": "Store patient information",
+                    "name": "store_patient_details",
+                    "description": "Store basic details of a patient",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "Name": {
                                 "type": "string",
-                                "description": "Patient's name"
+                                "description": "Name of the patient"
                             },
                             "Gender": {
                                 "type": "string",
-                                "description": "Patient's gender"
+                                "description": "Gender of the patient"
                             },
                             "Location": {
                                 "type": "string",
-                                "description": "Patient's location"
+                                "description": "Location of the patient"
                             },
                             "Issue": {
                                 "type": "string",
-                                "description": "Patient's medical issue"
+                                "description": "The Health Concerns or Symptoms of a patient"
                             }
-                        },
-                        "required": ["Name", "Gender", "Location", "Issue"]
+                        }
                     }
                 }
             }
@@ -188,7 +192,7 @@ def chat_engine():
             patient_data = history.get_patient_data() or {}
             
             # Prepare messages more efficiently by building the list once
-            messages = [{"role": "system", "content": SYSTEM_AGENT_SIMPLE}]
+            messages = [{"role": "system", "content": SYSTEM_AGENT_ENHANCED}]
             
             # Add initial greeting if this is a new session
             if not history.messages:
@@ -253,118 +257,93 @@ def chat_engine():
                         if func_name == "get_available_doctors_specialities":
                             # This is lightweight, no need to optimize
                             result = get_available_doctors_specialities()
-                        elif func_name == "get_doctor_by_speciality":
-                            # Extract the base parameters from function arguments
-                            speciality = func_args.get("speciality", "")
-                            location = func_args.get("location", "")
-                            sub_speciality = func_args.get("sub_speciality", None)
-                            symptoms = func_args.get("symptoms", None)
+                        elif func_name == "search_doctors_dynamic":
+                            user_message = func_args.get("user_message", "")
                             
                             # Get patient data to ensure consistent location use
                             patient_data = history.get_patient_data() or {}
                             
-                            # If location is missing but we have it in patient data, use that
-                            if (not location or location.strip() == "") and patient_data.get("Location"):
-                                location = patient_data.get("Location")
-                                print(f"Using location from patient data: {location}")
-                            # Also check the old "Location" field for backward compatibility
-                            elif (not location or location.strip() == "") and patient_data.get("Location"):
-                                location = patient_data.get("Location")
-                                print(f"Using Location from patient data: {location}")
+                            # If location is in patient data but not in message, append it
+                            if patient_data.get("Location") and "in " + patient_data.get("Location").lower() not in user_message.lower():
+                                user_message += f" in {patient_data.get('Location')}"
+                                print(f"Added location from patient data to query: {user_message}")
                             
-                            # Verify location is provided - this is required
-                            if not location or location.strip() == "":
-                                # Return error to force the AI to ask for location
-                                result = {
-                                    "error": "Location must be specified to find doctors. Please ask the patient for their preferred location.",
-                                    "required_field": "location"
-                                }
+                            # Call the dynamic search function
+                            result = search_doctors_dynamic(user_message)
+                            
+                            # Check if we need additional information - use the improved message from search_doctors_dynamic
+                            if isinstance(result, dict) and result.get("status") == "needs_more_info":
+                                message = result.get("message", "I need more information to find doctors for you.")
+                                
+                                formatted_response = {"message": message}
+                                response_content = formatted_response["message"]
+                                messages.append({
+                                    "role": "assistant",
+                                    "content": response_content
+                                })
+                                history.add_ai_message(response_content)
+                                return formatted_response
+                            
+                            # Format response based on search results
+                            if result.get("count", 0) > 0:
+                                print(f"Found {result['count']} doctors matching the criteria.")
                                 doctors_data = result
+                                
+                                # Create informative main message based on search results
+                                count = result["count"]
+                                doctors = result["doctors"]
+                                specialty = doctors[0].get("Specialty", "").lower()
+                                fee_range = None
+                                
+                                if len(doctors) > 0:
+                                    fees = [d.get("Fee", 0) for d in doctors if d.get("Fee")]
+                                    if fees:
+                                        min_fee = min(fees)
+                                        max_fee = max(fees)
+                                        if min_fee == max_fee:
+                                            fee_range = f"{min_fee} SAR"
+                                        else:
+                                            fee_range = f"{min_fee} to {max_fee} SAR"
+
+                                # Construct informative message without doctor details
+                                main_message = f"I've found {count} qualified {specialty} specialist{'s' if count > 1 else ''}"
+                                if fee_range:
+                                    main_message += f" with consultation fees ranging from {fee_range}"
+                                main_message += ". You can view their details, including locations and contact information, in the results below."
+
+                                formatted_response = {
+                                    "message": main_message,
+                                    "data": {
+                                        "count": count,
+                                        "doctors": result["doctors"],
+                                        "message": "I've found matching doctors in your area"
+                                    }
+                                }
                             else:
-                                # If patient has an issue but no symptoms provided, use that
-                                if not symptoms and patient_data.get("Issue"):
-                                    symptoms = patient_data.get("Issue")
-                                    print(f"Using symptoms from patient data: {symptoms[:30]}...")
-                                
-                                # Try to detect specialty from symptoms or patient's issue
-                                issue_text = symptoms  # First try symptoms from call
-                                
-                                # If no symptoms in call, try patient data
-                                if not issue_text:
-                                    patient_data = history.get_patient_data()
-                                    if patient_data and patient_data.get("Issue"):
-                                        issue_text = patient_data.get("Issue")
-                                        print(f"Found patient issue from session: {issue_text}")
-                                
-                                # If we have any symptom/issue text and need to determine speciality/subspeciality
-                                if issue_text and (not speciality or not sub_speciality or speciality == "" or sub_speciality == ""):
-                                    detected_specialty, detected_subspecialty = detect_speciality_subspeciality(issue_text)
-                                    
-                                    print(f"Detected from symptoms: specialty={detected_specialty}, subspecialty={detected_subspecialty}")
-                                    
-                                    # Use detected values if found and not already specified
-                                    if detected_subspecialty and (not sub_speciality or sub_speciality == ""):
-                                        sub_speciality = detected_subspecialty
-                                        print(f"Using detected subspecialty: {sub_speciality}")
-                                    
-                                    if detected_specialty and (not speciality or speciality == ""):
-                                        speciality = detected_specialty
-                                        print(f"Using detected specialty: {speciality}")
-                                        
-                                # For dental cases with no subspecialty, don't set default in the API call
-                                # Let the get_doctor_name_by_speciality function handle it
-                                if speciality and speciality.upper() == "DENTISTRY" and (not sub_speciality or sub_speciality == ""):
-                                    print(f"DENTISTRY detected without subspecialty - letting the API handle default")
-                                
-                                # Check if subspecialty is "General Dentist" and set it to None for API
-                                if sub_speciality and sub_speciality.lower() == "general dentist":
-                                    print("General Dentist detected - setting subspecialty to None for API call")
-                                    sub_speciality = None
-                                
-                                # Log the final parameters for debugging
-                                print(f"Final search parameters: speciality={speciality}, location={location}, sub_speciality={sub_speciality}")
-                                
-                                # Direct call to database function
-                                if(not speciality or speciality == "") and (not sub_speciality or sub_speciality == ""):
-                                    print("No speciality or subspeciality provided - using patient data")
-                                    result = {
-                                        "message" : "We dont have doctors for this issue."
-                                    }
-                                else:
-                                    result = get_doctor_name_by_speciality(speciality, location, sub_speciality)
-                                
-                                # Log helpful hints for the AI to display results properly
-                                if result and isinstance(result, list) and len(result) > 0:
-                                    print(f"Found {len(result)} doctors for {speciality} {sub_speciality or ''} in {location}.")
-                                    print("IMPORTANT: AI should display these doctors to the user immediately.")
-                                elif result and isinstance(result, list) and len(result) == 0:
-                                    print(f"No doctors found for {speciality} {sub_speciality or ''} in {location}. AI should suggest alternatives.")
-                                
-                                # Maintain original response structure for frontend compatibility
-                                # Remove the detected_subspecialty field added earlier if it exists
-                                if result and isinstance(result, list):
-                                    for record in result:
-                                        if 'detected_subspecialty' in record:
-                                            del record['detected_subspecialty']
-                                
-                                # Add a top level patient_data field to make it explicit
-                                if not isinstance(result, dict) or "error" not in result:  # Only add if not an error response
-                                    # Explicitly set this as doctors_data to include with response
-                                    doctors_data = {
-                                        "doctor_results": result,
-                                        "patient_data": history.get_patient_data() or {}
-                                    }
-                                else:
-                                    # For error cases, keep original structure
-                                    doctors_data = result
-                                
-                                # Get patient data to return with the results if available
-                                patient_data = history.get_patient_data()
-                                if patient_data:
-                                    print("Found patient data in session, will include it with doctor results.")
-                                    print(f"Patient data: {patient_data}")
-                                    # This will be added to the formatted_response in the final return
-                        elif func_name == "store_patient_details_tool":
+                                print("No doctors found matching the criteria.")
+                                # Use the custom message from the result if available
+                                main_message = result.get("message", "I apologize, but I couldn't find any doctors matching your criteria. Would you like to try with different search terms or expand your search area?")
+                                doctors_data = {
+                                    "count": 0,
+                                    "doctors": [],
+                                    "message": main_message
+                                }
+                                formatted_response = {
+                                    "message": main_message,
+                                    "data": doctors_data
+                                }
+
+                            # Prevent further message modifications for this search
+                            response_content = formatted_response["message"]
+                            messages.append({
+                                "role": "assistant",
+                                "content": response_content
+                            })
+                            history.add_ai_message(response_content)
+                            
+                            # Skip getting final response from OpenAI since we have our result
+                            return formatted_response
+                        elif func_name == "store_patient_details":
                             # Add session_id to the arguments
                             func_args["session_id"] = session_id
                             

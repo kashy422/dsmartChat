@@ -13,7 +13,8 @@ from .utils import CustomCallBackHandler
 from src.AESEncryptor import AESEncryptor
 from .utils import CustomCallBackHandler, thread_local  # Import thread_local from utils.py
 
-
+# Import our query builder functionality
+from .query_builder_agent import search_doctors, detect_symptoms_and_specialties
 
 app = FastAPI()
 engine = chat_engine()
@@ -312,3 +313,62 @@ async def text_to_speech(text: str) -> str:
         return audio_base64
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error in text-to-speech conversion: {str(e)}")
+
+# New request models for doctor search
+class DoctorSearchRequest(BaseModel):
+    query: str
+    
+class SymptomAnalysisRequest(BaseModel):
+    symptoms: str
+
+@app.post("/search-doctors")
+async def doctor_search_endpoint(request: DoctorSearchRequest):
+    """
+    Search for doctors based on natural language query.
+    
+    Example queries:
+    - "Show me dentists in Riyadh"
+    - "Find cardiologists with 5+ years experience in Jeddah"
+    - "Dermatologists with good ratings in Riyadh" 
+    """
+    try:
+        start_time = time.time()
+        result = search_doctors(request.query)
+        processing_time = time.time() - start_time
+        
+        # Add performance metrics
+        result["performance"] = {
+            "processing_time": round(processing_time, 2)
+        }
+        
+        # Make sure we return a clear message when more information is needed
+        if result.get('status') == 'needs_more_info':
+            # Make the message stand out in the response
+            print(f"Need more information for doctor search: {result.get('message')}")
+        
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error searching for doctors: {str(e)}")
+
+@app.post("/analyze-symptoms")
+async def symptom_analysis_endpoint(request: SymptomAnalysisRequest):
+    """
+    Analyze symptoms and recommend appropriate medical specialties.
+    
+    Example input:
+    - "I have a persistent toothache and my gums are swollen"
+    - "I'm experiencing chest pain and shortness of breath"
+    """
+    try:
+        start_time = time.time()
+        result = detect_symptoms_and_specialties(request.symptoms)
+        processing_time = time.time() - start_time
+        
+        # Add performance metrics
+        result["performance"] = {
+            "processing_time": round(processing_time, 2)
+        }
+        
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error analyzing symptoms: {str(e)}")

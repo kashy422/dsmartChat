@@ -2,6 +2,7 @@ from langchain_core.tools import tool, StructuredTool
 from pydantic import BaseModel, Field
 from enum import Enum
 from typing import List, Optional, Union
+import logging
 
 from sqlalchemy import text
 from .db import DB
@@ -10,7 +11,17 @@ from decimal import Decimal
 import time
 from functools import wraps
 
+# Replace the old import with the new functions from query_builder_agent
+from .query_builder_agent import extract_search_criteria, build_query, format_doctor_result, search_doctors, detect_symptoms_and_specialties
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Initialize the database
 db = DB()
 
 # Define Speciality Enum
@@ -21,13 +32,6 @@ class SpecialityEnum(str, Enum):
     ORTHOPEDICS = "Orthopedics"
     
 SPECIALITY_MAP = {
-#    "Orthodontist": "DENTISTRY",
-#     "Periodontist": "DENTISTRY",
-#     "Prosthodontist": "DENTISTRY",
-#     "General Dentistry": "DENTISTRY",
-#     "Implantology": "DENTISTRY",
-#     "Cosmetic Dentist": "DENTISTRY",
-
     "Endodontics": "DENTISTRY",
     "Periodontics": "DENTISTRY",
     "Oral Surgery" : "DENTISTRY",
@@ -39,6 +43,7 @@ SPECIALITY_MAP = {
     "Restorative Dentistry" : "DENTISTRY",
     "Forensic Dentistry" : "DENTISTRY"
 }
+
 # class GetDoctorsBySpecialityInput(BaseModel):
 #     speciality: SpecialityEnum = Field(description="Speciality of the doctor")
 #     location: str = Field(description="Location of the doctor")
@@ -152,7 +157,7 @@ def get_doctor_name_by_speciality(speciality: str, location: str, sub_speciality
 
         # Call stored procedure with final parameters
         print(f"Executing query with: speciality={speciality}, sub_speciality={sub_speciality}, location={location}")
-        stored_proc_query = text("EXEC draide_prod.dbo.GetRandomEntitiesByCriteria :speciality, :sub_speciality, :location")
+        stored_proc_query = text("EXEC GetRandomEntitiesByCriteria :speciality, :sub_speciality, :location")
         
         # Execute query with params
         result = cursor.execute(stored_proc_query, {
@@ -522,8 +527,7 @@ def profile(func):
 @tool(return_direct=False)
 def find_doctors_by_speciality(args=None) -> list[dict[str, str | int | float | bool]]:
     """
-    Fetch doctors by speciality, location, and sub-speciality from the database.
-    The function detects speciality from patient's symptoms if speciality is not provided.
+    Fetch doctors by speciality, location, and sub-speciality from the database using dynamic search.
     """
     start_time = time.time()
     
@@ -542,19 +546,100 @@ def find_doctors_by_speciality(args=None) -> list[dict[str, str | int | float | 
         location = args.location
         sub_speciality = args.sub_speciality
     
-    print(f"Processing doctor search: speciality={speciality}, location={location}, sub_speciality={sub_speciality}")
+    # Construct natural language query for the dynamic search
+    query = f"Find doctors"
+    if speciality:
+        query += f" specializing in {speciality}"
+    if sub_speciality:
+        query += f" with subspecialty in {sub_speciality}"
+    if location:
+        query += f" in {location}"
     
-    processing_time = time.time() - start_time
-    print(f"Args processing took {processing_time:.4f} seconds")
+    print(f"Converting to dynamic search: {query}")
     
-    # Call the database function with profiling to time the operation
-    query_start = time.time()
-    doctors = get_doctor_name_by_speciality(speciality, location, sub_speciality)
-    query_time = time.time() - query_start
-    print(f"Database query took {query_time:.4f} seconds")
+    # Use the dynamic search function
+    result = search_doctors_dynamic(query)
     
-    # Format results for efficient serialization to JSON
     total_time = time.time() - start_time
     print(f"Total find_doctors_by_speciality execution time: {total_time:.4f} seconds")
     
-    return doctors
+    return result.get("doctors", [])
+
+def search_doctors_dynamic(user_message: str) -> dict:
+    """
+    Search for doctors using natural language query
+    """
+    try:
+        logger.info(f"Starting dynamic doctor search with message: {user_message}")
+        
+        # Use the new search_doctors function from query_builder_agent
+        result = search_doctors(user_message)
+        logger.info(f"Search completed with status: {result.get('status', 'unknown')}")
+        
+        # Check if we need more information and provide a helpful response
+        if result.get('status') == 'needs_more_info':
+            # Get missing fields
+            missing = result.get('missing', {})
+            
+            # Use the provided message if available, otherwise build our own
+            if result.get('message'):
+                prompt_message = result.get('message')
+            else:
+                # Build a more specific message based on missing fields
+                prompt_message = "I need more information to find the right doctors for you. "
+                
+                if missing.get('speciality', False):
+                    prompt_message += "Please tell me what type of doctor you're looking for (e.g., dentist, cardiologist, general physician). "
+                
+                if missing.get('location', False):
+                    prompt_message += "Which city or specific area would you prefer for your appointment? "
+            
+            # Update the message in the result to be more helpful
+            result['message'] = prompt_message
+            
+            # Make sure we don't have empty doctors array which might get displayed
+            if 'doctors' not in result or not result['doctors']:
+                result['doctors'] = []
+                result['count'] = 0
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error in dynamic doctor search: {str(e)}")
+        return {
+            "status": "error",
+            "count": 0,
+            "doctors": [],
+            "message": "An error occurred while searching for doctors. Please provide more specific information about the type of doctor and location you're looking for."
+        }
+
+@tool(return_direct=False)
+def dynamic_doctor_search(user_query: str) -> dict:
+    """
+    Search for doctors using a natural language query.
+    The query can include criteria like:
+    - Doctor specialty (e.g., dentist, cardiologist)
+    - Location/city
+    - Rating requirements
+    - Price/fee limits
+    - Experience requirements
+    - Hospital/clinic name
+    
+    Examples: 
+    - "Show me dentists in Riyadh"
+    - "Find cardiologists with 5+ years experience in Jeddah"
+    - "Dermatologists with good ratings in Riyadh"
+    """
+    result = search_doctors(user_query)
+    return result
+
+@tool(return_direct=False)
+def analyze_symptoms(symptom_description: str) -> dict:
+    """
+    Analyze user-described symptoms and suggest appropriate medical specialties.
+    This tool helps identify which type of doctor would be most appropriate based on symptoms.
+    
+    Example input: "I have a persistent toothache and my gums are swollen"
+    """
+    result = detect_symptoms_and_specialties(symptom_description)
+    return result
