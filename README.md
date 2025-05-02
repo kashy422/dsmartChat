@@ -84,3 +84,53 @@ Run the test script to verify functionality:
 ```commandline
 >> python -m src.test_query_builder
 ```
+
+## Improved Logging
+
+The application now includes an improved logging system that makes the debug logs more insightful and readable while reducing duplicate content.
+
+### Key Features
+
+- Clear section headers for major operations (SYMPTOM ANALYSIS, DOCTOR SEARCH)
+- Tool transitions that clearly indicate which component is active (QUERY BUILDER, DATABASE QUERY)
+- Performance metrics showing elapsed time for operations
+- Highlighted critical information (symptoms, specialties, warnings)
+- Reduced duplicate content (SQL queries shown only once)
+- Improved visual organization with component names and timing information
+
+### Example Log Output
+
+```
+15:56:09.944 INFO     [agent       ] SYMPTOM DETECTION: Checking message for symptoms: 'i am feeling toothace...'
+
+========== STARTING SYMPTOM ANALYSIS [15:56:10.144] ==========
+15:56:10.144 INFO     [specialty_matcher] SYMPTOM ANALYSIS: Starting for user description: 'i am feeling toothace...'
+15:56:10.195 INFO     [specialty_matcher] SYMPTOM ANALYSIS: Loaded 12 specialty records in 1.20s
+15:56:10.196 INFO     [specialty_matcher] SYMPTOM ANALYSIS: Calling OpenAI API to analyze symptoms
+15:56:11.967 INFO     [specialty_matcher] SYMPTOM ANALYSIS: Detected 1 symptoms and recommended 1 specialties
+15:56:11.968 SUCCESS  [specialty_matcher] SYMPTOM ANALYSIS: Top recommendation - Specialty: Dentistry, Subspecialty: Endodontics, Confidence: 1.0
+15:56:11.969 SUCCESS  [agent       ] SYMPTOM PROCESSING: Detected symptoms: toothache
+15:56:11.970 SUCCESS  [agent       ] SYMPTOM PROCESSING: Found confident recommendation - Dentistry (subspecialty: Endodontics) with confidence 1.00
+
+Symptom analysis completed in 1.83s
+
+========== STARTING DOCTOR SEARCH [15:56:26.877] ==========
+15:56:26.877 INFO     [agent_tools ] Starting dynamic doctor search with message: Find Dentistry specialist in Endodontics in Riyadh
+15:56:26.878 INFO     [query_builder] Starting doctor search with query: 'Find Dentistry specialist in Endodontics in Riyadh'
+
+--- QUERY BUILDER [15:56:27.275] ---
+15:56:27.276 INFO     [query_builder] Extracted criteria: {'speciality': 'Dentistry', 'subspeciality': 'Endodontics', 'location': 'Riyadh'}
+15:56:27.375 SUCCESS  [query_builder] Found subspeciality ID: 2 for Endodontics
+15:56:27.376 INFO     [query_builder] Building query with 3 conditions
+
+Query built in 0.69s
+
+--- DATABASE QUERY [15:56:28.065] ---
+15:56:28.066 INFO     [db          ] Executing query with parameters: {'p1': '%Dentistry%', 'p2e': 2, 'p3': '%Riyadh%'}
+15:56:28.196 INFO     [db          ] Query executed successfully in 0.77 seconds
+15:56:28.197 WARNING  [db          ] Found 0 matching doctors
+15:56:28.198 INFO     [agent_tools ] Search completed with status: success
+Doctor search success in 1.32s
+```
+
+The improved logging is automatically initialized when the API server starts.

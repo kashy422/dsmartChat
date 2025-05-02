@@ -1,12 +1,11 @@
 import os
 from pprint import pprint
 import logging
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 from dotenv import load_dotenv
 import urllib
-from enum import Enum
 import uuid
 import datetime 
 from decimal import Decimal
@@ -20,31 +19,6 @@ load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Define Speciality Enum
-class SpecialityEnum(str, Enum):
-    DERMATOLOGIST ="Dermatologist"
-    DERMATOLOGY = "Dermatology"
-    
-    DENTISTRY = "Dentistry"
-    CARDIOLOGY = "Cardiology"
-    ORTHOPEDICS = "Orthopedics"
-    GENERALSURGERY = "General Surgery"
-    GENERALDENTIST = "General Dentist"
-    ORTHODONTIST = "Orthodontist"
-
-SPECIALITY_MAP = {
-    "Endodontics": "DENTISTRY",
-    "Periodontics": "DENTISTRY",
-    "Oral Surgery" : "DENTISTRY",
-    "Oral and Maxillofacial Surgery" : "DENTISTRY",
-    "Surgical Orthodontics" : "DENTISTRY",
-    "Orthodontics" : "DENTISTRY",
-    "Dental Implants" : "DENTISTRY",
-    "Pediatric Dentistry" : "DENTISTRY",
-    "Restorative Dentistry" : "DENTISTRY",
-    "Forensic Dentistry" : "DENTISTRY"
-}
 
 # Simple cache implementation
 class Cache:
@@ -97,7 +71,7 @@ class DB:
                 max_overflow=20,
                 pool_timeout=30,
                 pool_recycle=1800,  # Recycle connections after 30 minutes
-                echo=True  # Enable SQL query logging
+                echo=False  # Disable SQL query logging in production
             )
             
             # Initialize cache with 1-hour TTL
@@ -117,40 +91,81 @@ class DB:
     def __del__(self):
         print("Connection to the MySQL database closed.")
 
-
-    # def get_available_doctors_specialities(self) -> list[SpecialityEnum]:
-    #     try:
-    #         cursor = self.engine.connect()
-    #         result = cursor.execute(text("select DISTINCT MainSpecialtyName from DocData;"))
-    #         specialities = [doc['MainSpecialtyName'] for doc in result.mappings()]
-    #         cursor.close()
-
-    #         # Filter the specialties that match the Enum values
-    #         available_specialities = [
-    #             speciality for speciality in SpecialityEnum if speciality.value in specialities
-    #         ]
-
-    #         return available_specialities
-
-    #     except Exception as e:
-    #         logger.error(f"Error retrieving specialties: {e}")
-    #         return []
-
-    # Function to detect speciality and sub-speciality
-
-    def get_available_doctors_specialities(self) -> list[SpecialityEnum]:
+    def get_available_specialties(self) -> List[str]:
+        """
+        Get a list of all available medical specialties from the database.
+        
+        Returns:
+            List of specialty names as strings
+        """
+        cache_key = "available_specialties"
+        cached_result = self.cache.get(cache_key)
+        if cached_result is not None:
+            logger.info(f"Cache hit for {cache_key}")
+            return cached_result
+        
         try:
-            # Return all available specialties from the enum
-            return list(SpecialityEnum)
-
+            cursor = self.engine.connect()
+            # Get distinct specialty names from the Speciality table
+            query = "SELECT DISTINCT SpecialityName FROM Speciality WHERE SpecialityName IS NOT NULL"
+            result = cursor.execute(text(query))
+            
+            # Extract the specialty names from the result
+            specialties = [row['SpecialityName'] for row in result.mappings()]
+            cursor.close()
+            
+            # Store in cache
+            self.cache.set(cache_key, specialties)
+            
+            logger.info(f"Retrieved {len(specialties)} specialties from database")
+            return specialties
+            
         except Exception as e:
             logger.error(f"Error retrieving specialties: {e}")
             return []
-
+    
+    def get_specialty_subspecialty_mapping(self) -> Dict[str, str]:
+        """
+        Get a mapping of subspecialties to their parent specialties.
+        
+        Returns:
+            Dictionary mapping subspecialty names to their parent specialty names
+        """
+        cache_key = "specialty_subspecialty_mapping"
+        cached_result = self.cache.get(cache_key)
+        if cached_result is not None:
+            logger.info(f"Cache hit for {cache_key}")
+            return cached_result
+        
+        try:
+            cursor = self.engine.connect()
+            # Get subspecialties and their parent specialties
+            query = "SELECT SpecialityName, SubSpeciality FROM Speciality WHERE SubSpeciality IS NOT NULL"
+            result = cursor.execute(text(query))
+            
+            # Build the mapping
+            mapping = {}
+            for row in result.mappings():
+                specialty = row['SpecialityName']
+                subspecialty = row['SubSpeciality']
+                if specialty and subspecialty:
+                    mapping[subspecialty] = specialty
+            
+            cursor.close()
+            
+            # Store in cache
+            self.cache.set(cache_key, mapping)
+            
+            logger.info(f"Retrieved mapping for {len(mapping)} subspecialties")
+            return mapping
+            
+        except Exception as e:
+            logger.error(f"Error retrieving specialty-subspecialty mapping: {e}")
+            return {}
             
     def get_doctor_name_by_speciality(
         self, 
-        speciality: SpecialityEnum, 
+        speciality: str, 
         location: str,
         min_rating: float = None,
         max_price: float = None,
@@ -158,7 +173,7 @@ class DB:
         min_experience: float = None
     ) -> list[dict[str, str | int | float | bool]]:
         # Create a cache key including the filter parameters
-        cache_key = f"{speciality.value}:{location}:{min_rating}:{min_price}:{max_price}:{min_experience}"
+        cache_key = f"{speciality}:{location}:{min_rating}:{min_price}:{max_price}:{min_experience}"
         
         # Check if result is in cache
         cached_result = self.cache.get(cache_key)
@@ -196,7 +211,7 @@ class DB:
             
             # Build parameters dictionary
             params = {
-                'speciality': f"%{speciality.value}%",
+                'speciality': f"%{speciality}%",
                 'location': f"%{location}%"
             }
             
@@ -294,10 +309,14 @@ class DB:
 
 if __name__ == "__main__":
     db = DB()
-    docs = db.get_available_doctors_specialities()
+    specialties = db.get_available_specialties()
     print("Available Specialities:")
-    pprint(docs)
+    pprint(specialties)
+
+    mapping = db.get_specialty_subspecialty_mapping()
+    print("Subspecialty to Specialty Mapping:")
+    pprint(mapping)
 
     print("Doctors for speciality: Dentistry in Jeddah")
-    docs = db.get_doctor_name_by_speciality(SpecialityEnum.DENTISTRY, 'Jeddah')
+    docs = db.get_doctor_name_by_speciality("DENTISTRY", 'Jeddah')
     pprint(docs)

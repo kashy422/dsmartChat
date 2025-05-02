@@ -4,7 +4,7 @@ import sys
 import colorama
 from colorama import Fore, Style
 
-from typing import Dict
+from typing import Dict, List, Any
 from llama_index.llms.openai.utils import OpenAIToolCall
 import re
 from dotenv import load_dotenv
@@ -16,6 +16,7 @@ from .common import write
 import json
 from .consts import SYSTEM_AGENT_SIMPLE
 from .db import DB
+from .agent_tools import analyze_symptoms, dynamic_doctor_search, store_patient_details, store_patient_details_tool
 
 load_dotenv()
 os.environ["OPENAI_API_KEY"] = os.getenv("API_KEY")
@@ -24,14 +25,28 @@ colorama.init(autoreset=True)
 db = DB()
 
 
-def get_doctor_name_by_speciality(speciality: str) -> list[dict[str, str | int | float | bool]]:
-    """Take input of speciality and return available doctors for that speciality"""
-    return db.get_doctor_name_by_speciality(speciality)
+def get_doctor_name_by_speciality(speciality: str, location: str = "Riyadh") -> List[Dict[str, Any]]:
+    """
+    Get doctors by speciality and location
+    
+    Args:
+        speciality: The medical specialty to search for
+        location: The location to search in (default: Riyadh)
+        
+    Returns:
+        List of doctors matching the criteria
+    """
+    return db.get_doctor_name_by_speciality(speciality, location)
 
 
-def get_available_doctors_specialities() -> list[str]:
-    """Return all available doctor specialities"""
-    return db.get_available_doctors_specialities()
+def get_available_doctors_specialities() -> List[str]:
+    """
+    Return all available doctor specialities from the database
+    
+    Returns:
+        List of available specialties
+    """
+    return db.get_available_specialties()
 
 
 def custom_tool_call_parser(tool_call: OpenAIToolCall) -> Dict:
@@ -48,15 +63,24 @@ def custom_tool_call_parser(tool_call: OpenAIToolCall) -> Dict:
         match = re.search(pattern, arguments_str)
 
         if match:
-            variable_name = match.group(1)  # This is the variable nmae
+            variable_name = match.group(1)  # This is the variable name
             content = match.group(2)  # This is the content within the quotes
             return {variable_name: content}
         raise ValueError(f"Invalid tool call: {e!s}")
 
 
 def chat_engine(verbose: bool = False) -> OpenAIAgent:
-    available_doctors_tool_conversational = FunctionTool.from_defaults(fn=get_doctor_name_by_speciality)
-    get_doctors_specialities_tool = FunctionTool.from_defaults(fn=get_available_doctors_specialities)
+    """
+    Create a chat engine with the three essential tools:
+    1. analyze_symptoms - For detecting specialty based on symptoms
+    2. dynamic_doctor_search - For searching doctors based on criteria
+    3. store_patient_details_tool - For storing patient information
+    """
+    symptom_analyzer_tool = FunctionTool.from_defaults(fn=analyze_symptoms)
+    doctor_search_tool = FunctionTool.from_defaults(fn=dynamic_doctor_search)
+    
+    # Use the existing structured tool for patient details
+    patient_details_tool = store_patient_details_tool
 
     custom_chat_history = [
         ChatMessage(
@@ -65,7 +89,7 @@ def chat_engine(verbose: bool = False) -> OpenAIAgent:
         ),
     ]
 
-    agent = OpenAIAgent.from_tools([available_doctors_tool_conversational, get_doctors_specialities_tool],
+    agent = OpenAIAgent.from_tools([symptom_analyzer_tool, doctor_search_tool, patient_details_tool],
                                    system_prompt=SYSTEM_AGENT_SIMPLE,
                                    chat_history=custom_chat_history,
                                    tool_call_parser=custom_tool_call_parser,
@@ -91,8 +115,7 @@ def repl_chat():
 
         write(f"Agent: {response}")
         if response.sources:
-            if response.sources[0].tool_name == "get_doctor_name_by_speciality":
-                write(f"Response: {response.sources[0].content}")
+            write(f"Response: {response.sources[0].content}")
 
 
 if __name__ == "__main__":
