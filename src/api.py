@@ -10,17 +10,14 @@ import boto3
 from fastapi.middleware.cors import CORSMiddleware
 import base64
 from .agent import chat_engine
-from .utils import CustomCallBackHandler, thread_local
+from .utils import CustomCallBackHandler, thread_local, setup_improved_logging
 from src.AESEncryptor import AESEncryptor
 from typing import Dict, List, Any, Optional
 
 # Import our essential tools and functionality
 from .agent_tools import analyze_symptoms, dynamic_doctor_search, store_patient_details
-from .query_builder_agent import search_doctors, detect_symptoms_and_specialties
-from .specialty_matcher import SpecialtyDataCache
-
-# Import improved logging
-from src.utils.logging_utils import setup_improved_logging
+from .query_builder_agent import unified_doctor_search, unified_doctor_search_tool, extract_search_criteria_tool
+from .specialty_matcher import SpecialtyDataCache, get_recommended_specialty
 
 # Set up improved logging at startup
 setup_improved_logging()
@@ -42,16 +39,19 @@ try:
     for subspecialty in sorted(unique_subspecialties):
         logger.info(f"  - {subspecialty}")
 
-    # Also print the variant mappings for reference
-    from .specialty_matcher import DYNAMIC_SUBSPECIALTY_VARIANT_MAP
-    logger.info(f"Created {len(DYNAMIC_SUBSPECIALTY_VARIANT_MAP)} subspecialty variant mappings:")
-    for variant, canonical in sorted(DYNAMIC_SUBSPECIALTY_VARIANT_MAP.items())[:10]:  # Show first 10 to avoid log spam
-        logger.info(f"  - '{variant}' → '{canonical}'")
-    if len(DYNAMIC_SUBSPECIALTY_VARIANT_MAP) > 10:
-        logger.info(f"  - ... and {len(DYNAMIC_SUBSPECIALTY_VARIANT_MAP) - 10} more mappings")
+    # No longer need to log variant mappings as we're using GPT for this now
+    logger.info(f"Using GPT for subspecialty matching instead of hardcoded mappings")
+
 except Exception as e:
     logger.error(f"Error preloading specialty data: {str(e)}")
     logger.warning("Application will continue but specialty matching may be affected")
+
+# Workflow notes:
+# 1. User describes symptoms → analyze_symptoms → detect symptoms and matching specialties
+# 2. Results stored in session history including specialties and subspecialties
+# 3. When searching for doctors, structured specialty/subspecialty information is passed 
+#    directly to the query builder rather than just using natural language
+# 4. This ensures consistent specialty mapping between symptom analysis and doctor search
 
 app = FastAPI()
 engine = chat_engine()
@@ -209,6 +209,74 @@ async def chat(
         processing_time = time.time() - process_start
         total_time = time.time() - start_time
         
+        # Check if this is a doctor search result with data field
+        if isinstance(response, dict) and 'data' in response and 'doctors' in response.get('data', {}):
+            print(f"DEBUG: Detected direct doctor search result with {len(response['data']['doctors'])} doctors")
+            
+            # Special handling for doctor data to ensure proper format separation
+            doctors_data = response['data']['doctors']
+            doctor_count = len(doctors_data)
+            
+            # Extract specialty information
+            specialty = "doctors"
+            if 'data' in response and 'criteria' in response['data'] and 'speciality' in response['data'].get('criteria', {}):
+                specialty = response['data']['criteria']['speciality']
+                
+            # Extract location information
+            location = ""
+            if 'data' in response and 'criteria' in response['data'] and 'location' in response['data'].get('criteria', {}):
+                location = response['data']['criteria']['location']
+                location_text = f" in {location}"
+            else:
+                location_text = ""
+            
+            # Replace any detailed doctor description in the message with a simple summary
+            # This ensures proper separation between UI components
+            clean_message = f"I found {doctor_count} {specialty} specialists{location_text} that match your criteria."
+            
+            # Check if the message has detailed doctor information and replace it
+            current_message = response.get('message', '')
+            if current_message and (
+                "rating" in current_message.lower() or 
+                "fee" in current_message.lower() or
+                "clinic" in current_message.lower() or
+                "**" in current_message or
+                "-" in current_message or
+                any(f"{i}." in current_message for i in range(1, 10))
+            ):
+                print(f"DEBUG: Replacing detailed doctor information in message with clean summary")
+                response['message'] = clean_message
+                print(f"DEBUG: Clean message: {clean_message}")
+            elif not current_message:
+                response['message'] = clean_message
+                
+            # Update the conversation history in the engine to maintain context
+            engine.invoke(
+                {
+                    "input": "__update_history__", 
+                    "session_id": session_id, 
+                    "message": response['message']
+                },
+                config={
+                    "configurable": {"session_id": session_id},
+                    "callbacks": [callBackHandler]
+                }
+            )
+            print(f"DEBUG: Updated conversation history with message: '{response['message']}'")
+            
+            # Ensure standard format with status field
+            if 'status' not in response:
+                response['status'] = 'success'
+            
+            # Add processing time
+            response['processing_time'] = time.time() - start_time
+            
+            # Log the final doctor search result structure 
+            print(f"DEBUG: Returning doctor search result with structure: {list(response.keys())}")
+            print(f"DEBUG: Data field contains: {list(response['data'].keys()) if 'data' in response else 'None'}")
+            
+            return response
+        
         # If callBackHandler has docs_data, return the data and clear it
         if callBackHandler.docs_data:
             response_data = {
@@ -292,12 +360,39 @@ def reset():
 
 
 def process_message(message: str, session_id: str) -> dict["str", "str"]:
-    thread_local.session_id = session_id
+    """
+    Process a user message and return an AI response.
     
-    start_time = time.time()  # Start timing
+    Args:
+        message: The user message to process
+        session_id: The session ID for the conversation
+        
+    Returns:
+        A dictionary containing the AI response
+    """
+    logger = logging.getLogger(__name__)
+    start_time = time.time()
     
     try:
-        print(f"Processing message for session {session_id}")
+        # Log the incoming message and session
+        thread_local.session_id = session_id
+        logger.info(f"Processing message: '{message}' for session {session_id}")
+        
+        # Check for direct doctor search queries
+        if any(term in message.lower() for term in ["find doctor", "find a doctor", "doctor near", "looking for doctor"]):
+            logger.info(f"Direct doctor search detected: '{message}'")
+            search_result = dynamic_doctor_search({"user_message": message})
+            error_time = time.time() - start_time
+            logger.info(f"Doctor search completed in {error_time:.2f}s")
+            return search_result
+        
+        # Check for direct symptom analysis
+        if "what could" in message.lower() and "symptom" in message.lower():
+            logger.info(f"Direct symptom analysis detected: '{message}'")
+            symptom_result = analyze_symptoms({"symptom_description": message})
+            error_time = time.time() - start_time
+            logger.info(f"Symptom analysis completed in {error_time:.2f}s")
+            return {"response": {"message": symptom_result["message"]}}
         
         # Time the AI invocation
         invoke_start = time.time()
@@ -310,56 +405,17 @@ def process_message(message: str, session_id: str) -> dict["str", "str"]:
         )
         invoke_time = time.time() - invoke_start
         
-        # Add debug logging
-        print(f"DEBUG: Response from engine.invoke: {response}")
-        if isinstance(response, dict):
-            print(f"DEBUG: Response keys: {response.keys()}")
-            if 'data' in response:
-                print(f"DEBUG: Data section keys: {response.get('data', {}).keys()}")
-                doctor_count = len(response.get('data', {}).get('doctors', []))
-                print(f"DEBUG: Data contains {doctor_count} doctors")
-                
-                # Make sure doctors data is included in the final response
-                if doctor_count > 0:
-                    print(f"DEBUG: Found {doctor_count} doctors in the response - ensuring they are included in final response")
-            
-            # Check if the callback handler has doctor data
-            if callBackHandler.docs_data:
-                print(f"DEBUG: CallBackHandler has docs_data")
-                callback_data = callBackHandler.docs_data
-                if isinstance(callback_data, dict) and 'data' in callback_data:
-                    callback_doctor_count = len(callback_data.get('data', {}).get('doctors', []))
-                    print(f"DEBUG: CallBackHandler docs_data has {callback_doctor_count} doctors")
+        error_time = time.time() - start_time
+        logger.info(f"Message processed in {error_time:.2f}s")
+        return {"response": response}
         
-        # Calculate total processing time
-        total_time = time.time() - start_time
-        
-        # Log performance metrics
-        print(f"Performance metrics - Total: {total_time:.2f}s, AI invoke: {invoke_time:.2f}s")
-        
-        if '</EXIT>' in str(response):
-            engine.history_messages_key = []
-
-        # Create a comprehensive response that ensures doctor data is included
-        final_response = {"response": response, "processing_time": total_time}
-        
-        # Special handling to ensure doctor data is passed through
-        if isinstance(response, dict) and 'data' in response and response['data'].get('doctors', []):
-            print(f"DEBUG: Ensuring doctor data from response is included in final response")
-            # The data is already in response, so it should be passed through
-        
-        # Check if the callBackHandler has additional data
-        elif callBackHandler.docs_data and isinstance(callBackHandler.docs_data, dict):
-            print(f"DEBUG: Using doctor data from callBackHandler")
-            # Override the response with the callback data which has doctor info
-            final_response["response"] = callBackHandler.docs_data
-            callBackHandler.docs_data = {}  # Clear after use
-
-        return final_response
     except Exception as e:
         error_time = time.time() - start_time
+        logger.error(f"Error processing message: {str(e)}", exc_info=True)
         print(f"Error in process_message after {error_time:.2f}s: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        
+        # Provide a fallback response
+        return {"response": {"message": "I'm sorry, I encountered an issue processing your request. Please try again."}}
 
 
 #
@@ -404,11 +460,15 @@ async def doctor_search_endpoint(request: DoctorSearchRequest):
     """
     try:
         start_time = time.time()
-        result = search_doctors(request.query)
+        result = unified_doctor_search(request.query)
         processing_time = time.time() - start_time
         
-        # Add performance metrics
-        result["performance"] = {
+        # Add performance metrics to the data object
+        if "data" not in result:
+            result["data"] = {}
+        
+        # Add performance data to the data object
+        result["data"]["performance"] = {
             "processing_time": round(processing_time, 2)
         }
         
@@ -419,7 +479,15 @@ async def doctor_search_endpoint(request: DoctorSearchRequest):
         
         return result
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error searching for doctors: {str(e)}")
+        # Return error in the new format
+        return {
+            "status": "error",
+            "message": f"Error searching for doctors: {str(e)}",
+            "data": {
+                "count": 0,
+                "doctors": []
+            }
+        }
 
 @app.post("/analyze-symptoms")
 async def analyze_symptoms_endpoint(request: SymptomAnalysisRequest):
@@ -454,15 +522,17 @@ async def analyze_symptoms_endpoint(request: SymptomAnalysisRequest):
         
         # Match symptoms to specialties
         analysis_start = time.time()
-        logger.info(f"API [/analyze-symptoms] [{request_id}]: Calling match_symptoms_to_specialties")
-        result = match_symptoms_to_specialties(request.description)
+        logger.info(f"API [/analyze-symptoms] [{request_id}]: Calling unified_doctor_search")
+        result = unified_doctor_search(request.description)
         analysis_time = time.time() - analysis_start
         logger.info(f"API [/analyze-symptoms] [{request_id}]: Analysis completed in {analysis_time:.2f}s")
         
         # Log key analysis results
         if result.get("status") == "success":
-            detected_symptoms = result.get("detected_symptoms", [])
-            recommendations = result.get("recommended_specialties", [])
+            # If using the new format, extract symptom analysis from the nested structure
+            symptom_analysis = result.get("symptom_analysis", {})
+            detected_symptoms = symptom_analysis.get("detected_symptoms", [])
+            recommendations = symptom_analysis.get("recommended_specialties", [])
             
             logger.info(f"API [/analyze-symptoms] [{request_id}]: Analysis successful - "
                         f"Detected {len(detected_symptoms)} symptoms, recommended {len(recommendations)} specialties")
@@ -470,7 +540,7 @@ async def analyze_symptoms_endpoint(request: SymptomAnalysisRequest):
             if recommendations:
                 top_specialty = recommendations[0]
                 logger.info(f"API [/analyze-symptoms] [{request_id}]: Top recommendation - "
-                           f"Specialty: {top_specialty.get('specialty')}, "
+                           f"Specialty: {top_specialty.get('name')}, "
                            f"Subspecialty: {top_specialty.get('subspecialty', 'None')}, "
                            f"Confidence: {top_specialty.get('confidence', 0):.2f}")
         else:
@@ -535,35 +605,47 @@ class SymptomDebugRequest(BaseModel):
 @app.post("/debug/symptom-matching")
 async def debug_symptom_matching_endpoint(request: SymptomDebugRequest):
     """
-    Debug endpoint for testing symptom matching with detailed diagnostics
-    
-    This endpoint directly accesses the symptom matching functionality without GPT analysis,
-    allowing you to see exactly how symptoms match to specialties in the database.
-    
-    Example input:
-    {
-        "symptoms": ["headache", "fever", "cough"],
-        "max_results": 5
-    }
+    Debug endpoint for testing symptom matching with detailed diagnostics.
+    Now provides a simplified version that uses the main unified_doctor_search function.
     """
     try:
-        from .specialty_matcher import debug_symptom_matching
-        
         start_time = time.time()
         request_id = f"dbg_{int(time.time())}_{hash(','.join(request.symptoms)) % 10000}"
         
-        logger.info(f"API [/debug/symptom-matching] [{request_id}]: Debugging {len(request.symptoms)} symptoms")
+        logger.info(f"API [/debug/symptom-matching] [{request_id}]: Analyzing {len(request.symptoms)} symptoms")
         logger.info(f"API [/debug/symptom-matching] [{request_id}]: Symptoms: {request.symptoms}")
         
-        result = debug_symptom_matching(request.symptoms, request.max_results)
+        # Combine symptoms into a single description
+        combined_symptoms = ", ".join(request.symptoms)
+        
+        # Call the unified function to analyze symptoms
+        analysis = unified_doctor_search(combined_symptoms)
+        
+        # Format the response
+        if analysis.get("is_describing_symptoms", False):
+            result = {
+                "status": "success",
+                "summary": {
+                    "total_symptoms": len(request.symptoms),
+                    "is_symptom_description": True,
+                },
+                "recommended_specialties": analysis.get("specialties", [])[:request.max_results],
+                "symptom_analysis": analysis.get("symptom_analysis", {})
+            }
+        else:
+            result = {
+                "status": "no_symptoms",
+                "summary": {
+                    "total_symptoms": len(request.symptoms),
+                    "is_symptom_description": False,
+                },
+                "message": "The input doesn't appear to be describing symptoms"
+            }
         
         processing_time = time.time() - start_time
-        if "performance" not in result:
-            result["performance"] = {}
-        result["performance"]["endpoint_processing_time"] = round(processing_time, 3)
+        result["performance"] = {"endpoint_processing_time": round(processing_time, 3)}
         
-        result_size = len(str(result))
-        logger.info(f"API [/debug/symptom-matching] [{request_id}]: Completed in {processing_time:.3f}s, returning {result_size} bytes")
+        logger.info(f"API [/debug/symptom-matching] [{request_id}]: Completed in {processing_time:.3f}s")
         
         return result
         
