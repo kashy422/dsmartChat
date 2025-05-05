@@ -11,7 +11,7 @@ import time
 from functools import wraps
 
 # Import the patient utilities from the new package structure
-from .utils import store_patient_details as store_patient_details_util
+from .utils import store_patient_details as store_patient_details_util, thread_local
 
 # Import the specialty matcher functionality
 from .specialty_matcher import detect_symptoms_and_specialties
@@ -254,7 +254,7 @@ def dynamic_doctor_search(user_query: str) -> Dict[str, Any]:
         # Return a standardized error response with the new format
         return {
             "status": "error",
-            "message": f"Error searching for doctors: {str(e)}",
+            "message": f"We are currently certifying doctors in our network. Please check back soon.",
             "data": {
                 "count": 0,
                 "doctors": [],
@@ -277,140 +277,89 @@ def ensure_proper_doctor_search_format(result: Dict[str, Any], query: str) -> Di
     logger.info(f"DEBUG FORMAT: Formatting search result with type: {type(result)}")
     logger.info(f"DEBUG FORMAT: Result structure: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
     
+    # Check for nested response objects and unwrap them
+    if isinstance(result, dict) and "response" in result and isinstance(result["response"], dict):
+        if "response" in result["response"]:
+            # Unwrap doubly-nested response
+            logger.info(f"DEBUG FORMAT: Unwrapping doubly-nested response")
+            result = {"response": result["response"]["response"]}
+    
+    # Extract data for standardized format
+    doctors = []
+    message = ""
+    patient_info = {"session_id": getattr(thread_local, 'session_id', '')}
+    
     # Handle the specific format returned by unified_doctor_search_tool
     if isinstance(result, dict) and "response" in result:
         logger.info(f"DEBUG FORMAT: Found 'response' key in result")
         response_data = result.get("response", {})
         
-        # Check keys in response
-        logger.info(f"DEBUG FORMAT: Response keys: {list(response_data.keys()) if isinstance(response_data, dict) else 'Not a dict'}")
-        
-        # Extract doctor data
-        doctors = response_data.get("data", [])
-        count = len(doctors)
-        logger.info(f"DEBUG FORMAT: Found {count} doctors in response.data")
-        
-        # Extract other useful information
-        message = response_data.get("message", f"I found {count} doctors based on your search.")
-        patient = response_data.get("patient", {})
-        
-        # Create properly formatted result
-        formatted_result = {
-            "status": "success",
-            "message": message,
-            "data": {
-                "count": count,
-                "doctors": doctors,
-                "query": query,
-                "patient": patient
+        # Check if response_data itself contains a response key (nested responses)
+        if "response" in response_data:
+            logger.info(f"DEBUG FORMAT: Found nested response, unwrapping")
+            response_data = response_data["response"]
+            
+        # Get doctors list from response
+        if isinstance(response_data, dict):
+            if "data" in response_data and isinstance(response_data["data"], list):
+                doctors = response_data["data"]
+                logger.info(f"DEBUG FORMAT: Found {len(doctors)} doctors in response.data")
+            
+            # Get message
+            if "message" in response_data:
+                message = response_data["message"]
+            
+            # Get patient info if available
+            if "patient" in response_data:
+                patient_info = response_data["patient"]
+                
+            # Return properly formatted result
+            return {
+                "response": {
+                    "message": message,
+                    "patient": patient_info,
+                    "data": doctors
+                }
             }
-        }
-        logger.info(f"DEBUG FORMAT: Created formatted result with {count} doctors")
-        return formatted_result
     
-    # If it's already in the right format, return it
-    if isinstance(result, dict) and "data" in result and "doctors" in result.get("data", {}):
-        logger.info(f"DEBUG FORMAT: Result already in correct format")
-        # Make sure there's a message
-        if "message" not in result or not result["message"]:
-            doctor_count = result.get("data", {}).get("count", 0)
-            specialty = "doctors"
-            
-            # Try to extract specialty from result
-            if "data" in result and "criteria" in result["data"] and "speciality" in result["data"]["criteria"]:
-                specialty = result["data"]["criteria"]["speciality"]
-            
-            # Create a default message
-            result["message"] = f"I found {doctor_count} {specialty} specialists based on your search."
-            
-        logger.info(f"DEBUG FORMAT: Returning result with {result.get('data', {}).get('count', 0)} doctors")
-        return result
-    
-    # If it has a standard data structure but is not in the right format
-    if isinstance(result, dict) and "count" in result and "doctors" in result:
-        logger.info(f"DEBUG FORMAT: Found count and doctors directly in result")
-        doctor_count = result.get("count", 0)
-        specialty = "doctors"
-        
-        # Try to extract specialty
-        if "criteria" in result and "speciality" in result["criteria"]:
-            specialty = result["criteria"]["speciality"]
-        
-        # Create a properly formatted response
-        formatted = {
-            "status": "success",
-            "message": f"I found {doctor_count} {specialty} specialists based on your search.",
-            "data": {
-                "count": doctor_count,
-                "doctors": result.get("doctors", []),
-                "criteria": result.get("criteria", {})
-            }
-        }
-        logger.info(f"DEBUG FORMAT: Created formatted result with {doctor_count} doctors from count/doctors keys")
-        return formatted
-    
-    # If it's in some other format, try to extract the data
+    # Extract doctor data from various possible locations
     if isinstance(result, dict):
-        logger.info(f"DEBUG FORMAT: Searching for doctors data in multiple locations")
-        # Extract doctor data if present
-        doctors = []
-        count = 0
-        
-        # Look for doctors data in common locations
-        if "doctors" in result:
-            logger.info(f"DEBUG FORMAT: Found doctors in top level")
-            doctors = result["doctors"]
-            count = len(doctors)
-        elif "data" in result and "doctors" in result["data"]:
-            logger.info(f"DEBUG FORMAT: Found doctors in data section")
+        # Get doctors list
+        if "data" in result and "doctors" in result["data"]:
             doctors = result["data"]["doctors"]
-            count = len(doctors)
-        elif "response" in result and "data" in result["response"]:
-            logger.info(f"DEBUG FORMAT: Found data in response section")
-            response_data = result["response"]["data"]
-            if isinstance(response_data, list):
-                logger.info(f"DEBUG FORMAT: Response data is a list with {len(response_data)} items")
-                doctors = response_data
-                count = len(doctors)
-        elif "performance" in result and "response" in result:
-            # This is the format from unified_doctor_search
-            logger.info(f"DEBUG FORMAT: Found performance and response keys")
-            response = result.get("response", {})
-            if "data" in response and isinstance(response["data"], list):
-                logger.info(f"DEBUG FORMAT: Found doctors list in response.data")
-                doctors = response["data"]
-                count = len(doctors)
+            logger.info(f"DEBUG FORMAT: Found {len(doctors)} doctors in data.doctors")
+        elif "doctors" in result:
+            doctors = result["doctors"]
+            logger.info(f"DEBUG FORMAT: Found {len(doctors)} doctors in top level")
+        elif "data" in result and isinstance(result["data"], list):
+            doctors = result["data"]
+            logger.info(f"DEBUG FORMAT: Found {len(doctors)} doctors in data array")
         
-        # Create a default message if none exists
-        message = result.get("message", f"I found {count} doctors based on your search.")
-        if "response" in result and "message" in result["response"]:
-            logger.info(f"DEBUG FORMAT: Using message from response")
-            message = result["response"]["message"]
+        # Get message
+        if "message" in result:
+            message = result["message"]
+        elif "status" in result and result["status"] == "not_found":
+            message = "We are currently certifying doctors in our network. Please check back soon."
+        else:
+            message = f"I found {len(doctors)} doctors based on your search."
         
-        # Return in the standard format
-        formatted = {
-            "status": "success",
-            "message": message,
-            "data": {
-                "count": count,
-                "doctors": doctors,
-                "query": query
-            }
-        }
-        logger.info(f"DEBUG FORMAT: Created final formatted result with {count} doctors")
-        return formatted
+        # Get patient info if available
+        if "patient" in result:
+            patient_info = result["patient"]
+        elif "data" in result and "patient" in result["data"]:
+            patient_info = result["data"]["patient"]
     
-    # If we can't find any doctor data, return an empty result
-    logger.warning(f"DEBUG FORMAT: Could not find doctor data in any expected location")
-    return {
-        "status": "not_found",
-        "message": "I couldn't find any doctors matching your criteria. Please try a different search.",
-        "data": {
-            "count": 0,
-            "doctors": [],
-            "query": query
+    # Create the standardized response structure
+    standardized_result = {
+        "response": {
+            "message": message,
+            "patient": patient_info,
+            "data": doctors
         }
     }
+    
+    logger.info(f"DEBUG FORMAT: Created standardized result with {len(doctors)} doctors")
+    return standardized_result
 
 @tool(return_direct=False)
 @profile

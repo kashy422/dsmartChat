@@ -32,6 +32,7 @@ class SearchCriteria(BaseModel):
     max_price: Optional[float] = None
     min_price: Optional[float] = None
     min_experience: Optional[float] = None
+    gender: Optional[str] = None
     hospital_name: Optional[str] = None
     branch_name: Optional[str] = None
     doctor_name: Optional[str] = None
@@ -120,6 +121,11 @@ def build_query(criteria: SearchCriteria) -> Tuple[str, Dict[str, Any]]:
         # Experience filter
         if criteria.min_experience is not None:
             where_conditions.append(f"AND le.Experience >= {float(criteria.min_experience)}")
+        
+        # Gender filter
+        if criteria.gender:
+            gender_value = criteria.gender.replace("'", "''")
+            where_conditions.append(f"AND le.Gender = N'{gender_value}'")
         
         # Combine conditions into a single where clause
         # The stored procedure expects the WHERE clause with AND at the beginning of each condition
@@ -294,7 +300,9 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
                 "Address_en": row.get('Address_en'),
                 "DiscountValue": float(row.get('DiscountValue')) if row.get('DiscountValue') is not None else 0,
                 "DiscountType": row.get('DiscountType', 'None'),
-                "HasDiscount": bool(row.get('HasDiscount', False))
+                "HasDiscount": bool(row.get('HasDiscount', False)),
+                "Gender": row.get('Gender', ''),
+                "Experience": float(row.get('Experience')) if row.get('Experience') is not None else 0
             }
             doctors.append(doctor)
         
@@ -334,7 +342,7 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
         if len(doctors) > 0:
             message = f"I found {len(doctors)} {specialty_text} specialists{location_text} based on your search."
         else:
-            message = f"I couldn't find any {specialty_text} specialists{location_text} matching your criteria."
+            message = f"We are currently certifying doctors in our network. Please check back soon for {specialty_text} specialists{location_text}."
         
         # Replace the detailed message with a simple one
         response["response"]["message"] = message
@@ -351,7 +359,7 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
             processing_time = 0
             return {
             "response": {
-                "message": f"Error searching for doctors: {str(e)}",
+                "message": f"We are currently certifying doctors in our network. Please check back soon.",
                 "patient": {
                     "Name": "",
                     "Gender": "",
@@ -388,6 +396,7 @@ def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
         - Experience requirements (minimum years)
         - Doctor name if mentioned (with title Dr/Doctor removed)
         - Clinic/branch name if mentioned
+        - Gender preference (male or female doctor)
         
         Return ONLY a JSON object with these fields (include only if mentioned):
         {
@@ -397,7 +406,8 @@ def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
             "min_rating": number,
             "min_experience": number,
             "doctor_name": "name",
-            "branch_name": "name"
+            "branch_name": "name",
+            "gender": "Male" or "Female"
         }
         """
         
@@ -447,6 +457,12 @@ def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
             if "branch_name" in extracted and extracted["branch_name"]:
                 criteria["branch_name"] = extracted["branch_name"].strip()
             
+            # Gender validation
+            if "gender" in extracted and extracted["gender"]:
+                gender = extracted["gender"].strip()
+                if gender.lower() in ["male", "female"]:
+                    criteria["gender"] = gender.capitalize()
+            
             logger.info(f"Extracted search criteria: {criteria}")
             return criteria
             
@@ -473,10 +489,19 @@ def _fallback_extraction(message: str) -> Dict[str, Any]:
             location = city.capitalize()
             break
             
+    # Extract gender if mentioned
+    gender = None
+    if "male doctor" in message.lower() or "man doctor" in message.lower():
+        gender = "Male"
+    elif "female doctor" in message.lower() or "woman doctor" in message.lower() or "lady doctor" in message.lower():
+        gender = "Female"
+            
     # Build criteria dictionary
     criteria = {}
     if location:
         criteria["location"] = location
+    if gender:
+        criteria["gender"] = gender
             
     logger.info(f"Fallback extraction: {criteria}")
     return criteria
@@ -544,7 +569,7 @@ def unified_doctor_search_tool(input_data: Union[str, Dict[str, Any]]) -> Dict[s
         logger.error(f"Error in unified_doctor_search_tool: {str(e)}", exc_info=True)
         return {
             "response": {
-                "message": f"Error searching for doctors: {str(e)}",
+                "message": f"We are currently certifying doctors in our network. Please check back soon.",
                 "patient": {
                     "Name": "",
                     "Gender": "",

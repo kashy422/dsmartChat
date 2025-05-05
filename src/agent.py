@@ -391,18 +391,39 @@ def validate_doctor_result(result, patient_data=None, json_requested=True):
         - doctors: List of full doctor data objects from the database
         - format_type: Always "json" to ensure frontend compatibility
     """
+    # Check for nested response objects and unwrap them
+    if isinstance(result, dict) and "response" in result and isinstance(result["response"], dict):
+        if "response" in result["response"]:
+            # Unwrap doubly-nested response
+            logger.info(f"VALIDATION: Unwrapping doubly-nested response")
+            result = {"response": result["response"]["response"]}
+    
     # Initialize with defaults
-    doctor_count = result.get("data", {}).get("count", 0)
+    doctor_count = 0
     specialty = "doctors"
     location = ""
+    doctors_data = []
     
-    # Extract specialty and location if available
-    if result.get("data", {}).get("criteria", {}):
-        criteria = result["data"]["criteria"]
-        if criteria.get("speciality"):
-            specialty = criteria["speciality"]
-        if criteria.get("location"):
-            location = criteria["location"]
+    # Extract data from various formats
+    if isinstance(result, dict):
+        if "response" in result and isinstance(result["response"], dict):
+            # Handle response format
+            response_data = result["response"]
+            doctors_data = response_data.get("data", [])
+            doctor_count = len(doctors_data)
+        elif "data" in result and isinstance(result["data"], dict):
+            # Handle data format
+            data = result["data"]
+            doctors_data = data.get("doctors", [])
+            doctor_count = data.get("count", len(doctors_data))
+            
+            # Extract specialty and location if available
+            if data.get("criteria", {}):
+                criteria = data["criteria"]
+                if criteria.get("speciality"):
+                    specialty = criteria["speciality"]
+                if criteria.get("location"):
+                    location = criteria["location"]
     
     # Also check patient data for location if not in search criteria
     if not location and patient_data and patient_data.get("Location"):
@@ -411,22 +432,19 @@ def validate_doctor_result(result, patient_data=None, json_requested=True):
     # Create location text if available
     location_text = f" in {location}" if location else ""
     
-    # Get the doctor data
-    doctors_data = result.get("data", {}).get("doctors", [])
-    
     # Create appropriate response based on results
     if doctor_count > 0:
         message = f"I found {doctor_count} {specialty} specialists{location_text} that match your criteria."
     else:
-        message = f"I couldn't find any {specialty} specialists{location_text} matching your criteria."
+        message = f"We are currently certifying doctors in our network. Please check back soon for {specialty} specialists{location_text}."
     
+    # Return in the standardized format (single level response)
     return {
-        "message": message,
-        "doctor_count": doctor_count,
-        "specialty": specialty,
-        "location": location,
-        "doctors": doctors_data,  # Include the complete doctor data objects
-        "format_type": "json"  # Always use JSON format for frontend compatibility
+        "response": {
+            "message": message,
+            "patient": patient_data or {"session_id": getattr(thread_local, 'session_id', '')},
+            "data": doctors_data
+        }
     }
 
 def chat_engine():
@@ -757,7 +775,7 @@ def chat_engine():
                                         if doctor_count > 0:
                                             validated_result["message"] = f"I found {doctor_count} {specialty} specialists{location_text} based on your search."
                                         else:
-                                            validated_result["message"] = f"I couldn't find any {specialty} specialists{location_text} matching your criteria."
+                                            validated_result["message"] = f"We are currently certifying doctors in our network. Please check back soon for {specialty} specialists{location_text}."
                                     
                                     # Record the execution in history
                                     history.add_tool_execution("search_doctors_dynamic", {
@@ -903,16 +921,32 @@ def chat_engine():
                         
                         # Return appropriate response format
                         if last_doctor_result and "doctors" in last_doctor_result:
-                            return {
-                                "message": final_content,
-                                "patient": patient_data or {"session_id": session_id},
-                                "data": last_doctor_result.get("doctors", [])
-                            }
+                            # Check if doctors is already wrapped in a response object
+                            if "response" in last_doctor_result:
+                                # Extract inner response to avoid nesting
+                                inner_response = last_doctor_result.get("response", {})
+                                return {
+                                    "response": {
+                                        "message": final_content,
+                                        "patient": inner_response.get("patient") or patient_data or {"session_id": session_id},
+                                        "data": inner_response.get("data", [])
+                                    }
+                                }
+                            else:
+                                return {
+                                    "response": {
+                                        "message": final_content,
+                                        "patient": patient_data or {"session_id": session_id},
+                                        "data": last_doctor_result.get("doctors", [])
+                                    }
+                                }
                         else:
                             return {
-                                "message": final_content,
-                                "patient": patient_data or {"session_id": session_id},
-                                "data": []
+                                "response": {
+                                    "message": final_content,
+                                    "patient": patient_data or {"session_id": session_id},
+                                    "data": []
+                                }
                             }
                     
                     else:
@@ -924,17 +958,21 @@ def chat_engine():
                         history.add_ai_message(content)
                         
                         return {
+                            "response": {
                                 "message": content,
-                            "patient": patient_data or {"session_id": session_id},
+                                "patient": patient_data or {"session_id": session_id},
                                 "data": []
-                            }    
+                            }
+                        }    
                 
                 except Exception as e:
                     logger.error(f"❌ Error processing message: {str(e)}", exc_info=True)
                     return {
-                        "message": "I apologize, but I encountered an error processing your request. Could you please try again?",
-                        "patient": patient_data or {"session_id": session_id},
-                        "data": []
+                        "response": {
+                            "message": "I apologize, but I encountered an error processing your request. Could you please try again?",
+                            "patient": patient_data or {"session_id": session_id},
+                            "data": []
+                        }
                     }
 
         # Initialize engine and return it
@@ -979,7 +1017,7 @@ def repl_chat(session_id: str):
             processing_time = time.time() - processing_start
             
             # Process and display response
-            bot_response = response.get('message', "I'm sorry, I couldn't generate a response")
+            bot_response = response.get('response', {}).get('message', "I'm sorry, I couldn't generate a response")
             history.add_ai_message(bot_response)
             logger.info(f"⏱️ REPL response generated in {processing_time:.2f}s")
             write(f"Agent: {bot_response}", role="assistant")

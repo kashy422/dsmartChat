@@ -152,13 +152,23 @@ async def chat(
                     # Generate audio response
                 audio_base64 = await text_to_speech(response['response']['message'])
                 
-                return {
-                    "response": {
-                        "message": response['response']['message'],
-                        "transcription": transcription,
-                        "Audio_base_64": audio_base64
+                # Return a single response object with audio data added
+                if "response" in response:
+                    # Add audio data to existing response
+                    response["response"]["Audio_base_64"] = audio_base64
+                    response["response"]["transcription"] = transcription
+                    return response
+                else:
+                    # Create a properly formatted response
+                    return {
+                        "response": {
+                            "message": response.get('message', ''),
+                            "transcription": transcription,
+                            "Audio_base_64": audio_base64,
+                            "patient": response.get('patient', {"session_id": session_id}),
+                            "data": response.get('data', [])
+                        }
                     }
-                }
             finally:
                 if os.path.exists(temp_file_path):
                     os.remove(temp_file_path)
@@ -170,7 +180,13 @@ async def chat(
             
     except Exception as e:
         logger.error(f"Error in chat endpoint: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return {
+            "response": {
+                "message": f"I encountered an error processing your request: {str(e)}",
+                "patient": {"session_id": session_id},
+                "data": []
+            }
+        }
 
 def process_message(message: str, session_id: str) -> dict:
     """Process incoming message by sending it to the agent"""
@@ -278,8 +294,8 @@ def process_message(message: str, session_id: str) -> dict:
         # If the response contains symptom analysis, store it for the session
         if isinstance(response, dict) and response.get("symptom_analysis"):
             thread_local.symptom_analysis = response
-            # Don't return the raw response, let the agent handle it
-            return {"response": response}
+            # Return as is without wrapping
+            return response
         
         # If we have a response with doctor data, ensure the message doesn't include doctor details
         if isinstance(response, dict) and isinstance(response.get("response"), dict) and "data" in response["response"]:
@@ -309,11 +325,18 @@ def process_message(message: str, session_id: str) -> dict:
                     response["response"]["message"] = simple_message
                     logger.info(f"Simplified doctor search result message: {simple_message}")
         
-        return {"response": response}
+        # Return the response without wrapping it in another response object
+        return response
 
     except Exception as e:
         logger.error(f"Error processing message: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return {
+            "response": {
+                "message": f"I apologize, but I encountered an error processing your request. Could you please try again?",
+                "patient": {"session_id": session_id},
+                "data": []
+            }
+        }
 
 class ImageRequest(BaseModel):
     base64_image: str  # Expecting a base64-encoded image string
