@@ -375,3 +375,40 @@ def format_csv_data(data):
     else:
         # If data is a scalar value, return a single row
         return [{"value": str(data)}] 
+
+def log_thread_local_state(logger, session_id=None):
+    """
+    Log the current state of thread_local for debugging session issues
+    
+    Args:
+        logger: The logger to use
+        session_id: Optional session ID for context
+    """
+    try:
+        logger.info(f"Thread local state for session {session_id or getattr(thread_local, 'session_id', 'unknown')}:")
+        
+        # List all attributes in thread_local
+        attrs = [attr for attr in dir(thread_local) if not attr.startswith('_')]
+        
+        if not attrs:
+            logger.info("  No attributes found in thread_local")
+            return
+            
+        for attr in attrs:
+            value = getattr(thread_local, attr)
+            if attr == 'symptom_analysis':
+                # Special handling for symptom_analysis to show key info
+                if isinstance(value, dict):
+                    sa_session = value.get('session_id', 'unknown')
+                    sa_desc = value.get('symptom_description', '')[:30]
+                    logger.info(f"  symptom_analysis: session={sa_session}, desc='{sa_desc}...'")
+                else:
+                    logger.info(f"  symptom_analysis: {type(value)}")
+            elif attr == 'last_search_results':
+                # Just log that it exists, not the full content
+                logger.info(f"  last_search_results: {type(value)}")
+            else:
+                # Log other attributes directly
+                logger.info(f"  {attr}: {value}")
+    except Exception as e:
+        logger.error(f"Error logging thread_local state: {str(e)}") 

@@ -49,48 +49,79 @@ from .query_builder_agent import unified_doctor_search, unified_doctor_search_to
 
 # Modified system prompt to emphasize friendly gathering of information
 SYSTEM_PROMPT = """
-You are an intelligent and empathetic medical assistant for a healthcare application. Your conversation style should be warm, friendly, and reassuring.
+You are an intelligent and empathetic medical assistant for a healthcare application. Your primary role is to help users find doctors and medical facilities quickly.
 
-PRIMARY CONVERSATION FLOW (FOLLOW THIS EXACTLY):
-1. Start by greeting the user and asking for BOTH their name AND age in the same message
-2. Once you have name and age, ask about their health concerns or how you can help them
-3. If they describe symptoms, use analyze_symptoms tool FIRST to identify specialties
-4. AFTER symptom analysis is complete, ALWAYS use search_doctors_dynamic to find appropriate specialists
-5. When a user provides simple affirmative responses like "ok", "yes", or "sure", ALWAYS search for doctors based on their previously analyzed symptoms
+IMMEDIATE SEARCH TRIGGERS - Take action immediately when user mentions:
+1. Doctor's name (e.g., "Dr. Ahmed", "Doctor Sarah")
+   - ONLY ask for location if not provided
+   - Use search_doctors_dynamic immediately with doctor's name
+   - DO NOT ask about symptoms or health concerns
 
-TOOL USAGE SEQUENCE (CRITICAL - FOLLOW THIS ORDER):
-1. store_patient_details - Use WHENEVER the user provides ANY personal information
-2. analyze_symptoms - Use WHENEVER the user describes health issues or symptoms
-3. search_doctors_dynamic - Use AUTOMATICALLY after analyze_symptoms completes AND you have the user's location
+2. Clinic/Hospital name (e.g., "Deep Care Clinic", "Hala Rose")
+   - ONLY ask for location if not provided
+   - Use search_doctors_dynamic immediately with facility name
+   - DO NOT ask about symptoms or health concerns
 
-IMPORTANT TRIGGER WORDS:
-- When the user says "ok", "yes", "sure", or any affirmative response after symptom analysis, IMMEDIATELY search for doctors
-- When the user mentions symptoms and has provided location, ALWAYS follow up with doctor search
-- When symptom analysis detects a specialty, ALWAYS search for doctors in that specialty
+3. Direct specialty request (e.g., "I need a dentist", "looking for a pediatrician")
+   - ONLY ask for location if not provided
+   - Use search_doctors_dynamic immediately with specialty
+   - DO NOT ask about symptoms or health concerns
 
-EACH TOOL'S PURPOSE:
-- store_patient_details: Saves ANY piece of user information as soon as they provide it
-- analyze_symptoms: Processes symptom descriptions to identify appropriate medical specialties
-- search_doctors_dynamic: Searches for appropriate doctors based on specialty and location. MUST be called after symptom analysis.
+CRITICAL RULES:
+1. When user mentions a doctor name:
+   ✓ If location provided → Search immediately
+   ✓ If location missing → ONLY ask for location, then search
+   × NEVER ask about symptoms
+   × NEVER ask about health concerns
+   × NEVER ask for age
 
-INFORMATION GATHERING APPROACH:
-- Ask name and age together in your first response
-- Wait for the user to share their health concerns voluntarily
-- If they describe symptoms, use analyze_symptoms BEFORE suggesting doctors
-- If they ask for doctors without mentioning location, ask for their location
+2. When user mentions a clinic/hospital:
+   ✓ If location provided → Search immediately
+   ✓ If location missing → ONLY ask for location, then search
+   × NEVER ask about symptoms
+   × NEVER ask about health concerns
+   × NEVER ask for age
 
-RESPONSE STYLE:
-- Keep a warm, friendly tone throughout
-- Be concise but personable
-- Use the user's name once provided
-- Make the conversation feel natural, not like a form
-- Acknowledge information when provided
+3. When user mentions a specialty:
+   ✓ If location provided → Search immediately
+   ✓ If location missing → ONLY ask for location, then search
+   × NEVER ask about symptoms
+   × NEVER ask for age
+
+SYMPTOM FLOW (ONLY if user specifically mentions health issues):
+1. Use analyze_symptoms
+2. Then search_doctors_dynamic
+3. Only enter this flow if user explicitly describes health problems
+
+TOOL USAGE:
+1. store_patient_details - Use when user provides information
+2. search_doctors_dynamic - Use IMMEDIATELY for doctor/clinic searches
+3. analyze_symptoms - Use ONLY when user explicitly describes health issues
+
+EXAMPLE RESPONSES:
+
+For doctor name:
+User: "I'm looking for Dr. Ahmed"
+Assistant: "I'll help you find Dr. Ahmed. Which city would you like to search in?"
+
+For clinic:
+User: "Where is Deep Care Clinic?"
+Assistant: "I'll look up Deep Care Clinic for you. Which city should I search in?"
+
+For specialty:
+User: "I need a dentist"
+Assistant: "I'll help you find a dentist. Which city are you looking in?"
+
+With location:
+User: "Looking for Dr. Sarah in Riyadh"
+Assistant: "I'll search for Dr. Sarah in Riyadh right away."
 
 IMPORTANT REMINDERS:
-- NEVER include doctor details in messages - only acknowledge you found them
-- NEVER claim to have found doctors unless you've used search_doctors_dynamic
-- NEVER provide medical diagnosis or suggest treatments
-- ALWAYS use tools in the correct sequence
+- NEVER include doctor details in messages
+- NEVER ask unnecessary questions
+- ALWAYS search immediately when you have location
+- ONLY ask for location if missing
+- Keep responses brief and focused
 """
 
 # Common Saudi cities - moved from hardcoded implementation to a constant
@@ -187,9 +218,15 @@ db_instance = DB()
 # Internal utils and helpers
 from .utils import store_patient_details as utils_store_patient_details, get_language_code
 
+# Load environment variables
 load_dotenv()
 
-os.environ["OPENAI_API_KEY"] = os.getenv("API_KEY") or os.getenv("OPENAI_API_KEY")
+# Set the OpenAI API key - Try different environment variable names
+api_key = os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY")
+if not api_key:
+    raise ValueError("OpenAI API key not found. Please set OPENAI_API_KEY or API_KEY environment variable.")
+
+os.environ["OPENAI_API_KEY"] = api_key
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
 os.environ["LANGCHAIN_API_KEY"] = "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"  # Exposed intentionally
 
@@ -277,6 +314,25 @@ model = ChatOpenAI(model="gpt-4o-mini-2024-07-18", callbacks=[cb])
 def get_session_history(session_id: str) -> ChatHistory:
     if session_id not in store:
         logger.info(f"New session {session_id} created - Using cached specialty data with {len(SpecialtyDataCache.get_instance())} records")
+        
+        # Important: Clear thread_local storage for the new session to prevent data leakage between sessions
+        # This ensures specialty/subspecialty from previous session isn't carried over
+        if hasattr(thread_local, 'symptom_analysis'):
+            logger.info(f"Clearing previous symptom_analysis data from thread_local for new session")
+            delattr(thread_local, 'symptom_analysis')
+            
+        if hasattr(thread_local, 'last_search_results'):
+            logger.info(f"Clearing previous search results from thread_local for new session")
+            delattr(thread_local, 'last_search_results')
+            
+        if hasattr(thread_local, 'extracted_criteria'):
+            logger.info(f"Clearing previous extracted_criteria from thread_local for new session")
+            delattr(thread_local, 'extracted_criteria')
+            
+        # Set the current session_id in thread_local
+        thread_local.session_id = session_id
+        
+        # Create a new history for this session
         store[session_id] = ChatHistory()
     
     history = store[session_id]
@@ -331,7 +387,7 @@ def validate_doctor_result(result, patient_data=None, json_requested=True):
         - doctor_count: Number of doctors found
         - specialty: Detected specialty
         - location: Detected location
-        - doctor_details: Formatted string with doctor information
+        - doctor_details: No longer included to avoid doctor details in message
         - doctors: List of full doctor data objects from the database
         - format_type: Always "json" to ensure frontend compatibility
     """
@@ -358,23 +414,6 @@ def validate_doctor_result(result, patient_data=None, json_requested=True):
     # Get the doctor data
     doctors_data = result.get("data", {}).get("doctors", [])
     
-    # Format doctor information for a detailed message
-    doctor_details = ""
-    if doctor_count > 0 and doctors_data:
-        doctor_details = "\n\nHere are the doctors I found:\n"
-        for i, doctor in enumerate(doctors_data[:min(5, len(doctors_data))], 1):
-            # Extract key information, handling potential missing fields
-            name = doctor.get("DoctorName_en", "Unknown")
-            doctor_specialty = doctor.get("Speciality", specialty)
-            rating = doctor.get("Rating", "N/A")
-            fee = doctor.get("Fee", "N/A")
-            branch = doctor.get("Branch_en", "N/A")
-            
-            # Format each doctor's details
-            doctor_details += f"{i}. Dr. {name} - {doctor_specialty}\n"
-            doctor_details += f"   Rating: {rating}, Fee: {fee}\n"
-            doctor_details += f"   Branch: {branch}\n"
-    
     # Create appropriate response based on results
     if doctor_count > 0:
         message = f"I found {doctor_count} {specialty} specialists{location_text} that match your criteria."
@@ -386,7 +425,6 @@ def validate_doctor_result(result, patient_data=None, json_requested=True):
         "doctor_count": doctor_count,
         "specialty": specialty,
         "location": location,
-        "doctor_details": doctor_details,
         "doctors": doctors_data,  # Include the complete doctor data objects
         "format_type": "json"  # Always use JSON format for frontend compatibility
     }
@@ -479,46 +517,140 @@ def chat_engine():
                 return model
                 
             def sync_session_history(self, session_id):
-                """
-                Synchronize the OpenAI message history with the chat history object
-                to ensure consistent state across both systems.
-                """
-                history = get_session_history(session_id)
+                """Synchronize OpenAI messages with session history"""
+                try:
+                    logger.info(f"SYNC: Starting history sync for session {session_id}")
+                    history = get_session_history(session_id)
                 
-                # If we don't have a messages array for this session, initialize it
-                if session_id not in self.messages_by_session:
-                    self.messages_by_session[session_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
+                    # Initialize messages for this session if not exists
+                    if session_id not in self.messages_by_session:
+                        self.messages_by_session[session_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
                 
-                messages = self.messages_by_session[session_id]
+                    messages = self.messages_by_session[session_id]
                 
-                # Count user/assistant messages in both stores
-                openai_user_count = sum(1 for m in messages if m["role"] == "user")
-                openai_assistant_count = sum(1 for m in messages if m["role"] == "assistant")
-                
-                history_user_count = sum(1 for m in history.messages if m["type"] == "human")
-                history_assistant_count = sum(1 for m in history.messages if m["type"] == "ai")
-                
-                logger.info(f"📊 Session {session_id} message counts - OpenAI: {openai_user_count} user, {openai_assistant_count} assistant; History: {history_user_count} user, {history_assistant_count} assistant")
-                
-                # If there's a mismatch, reconstruct the OpenAI messages from the history
-                if openai_user_count != history_user_count or openai_assistant_count != history_assistant_count:
-                    logger.warning(f"⚠️ Message count mismatch detected for session {session_id} - rebuilding OpenAI messages")
+                    # Log current state
+                    logger.info(f"SYNC: Current OpenAI messages: {len(messages)}")
+                    logger.info(f"SYNC: Current history messages: {len(history.messages)}")
+                    logger.info("SYNC: OpenAI message types: " + ", ".join([f"{m['role']}" for m in messages]))
+                    logger.info("SYNC: History message types: " + ", ".join([f"{m['type']}" for m in history.messages]))
                     
-                    # Keep the system message
+                    # Count messages by type
+                    openai_counts = {"user": 0, "assistant": 0, "system": 0, "tool": 0}
+                    history_counts = {"human": 0, "ai": 0, "system": 0, "tool": 0}
+                    
+                    for msg in messages:
+                        msg_role = msg['role']
+                        if isinstance(msg.get('tool_calls'), list):
+                            openai_counts['tool'] += 1
+                        else:
+                            openai_counts[msg_role] += 1
+                            
+                    for msg in history.messages:
+                        history_counts[msg['type']] += 1
+                        
+                    logger.info(f"SYNC: OpenAI message counts: {openai_counts}")
+                    logger.info(f"SYNC: History message counts: {history_counts}")
+                    
+                    # Check for mismatch
+                    if len(messages) != len(history.messages) + 1:  # +1 for system message
+                        logger.warning(f"SYNC: Message count mismatch - OpenAI: {len(messages)}, History: {len(history.messages)}")
+                
+                        # Log the actual messages for comparison
+                        logger.info("SYNC: OpenAI Messages:")
+                        for i, msg in enumerate(messages):
+                            content_preview = ""
+                            if msg.get('content'):
+                                content_preview = msg['content'][:50] + "..."
+                            elif msg.get('tool_calls'):
+                                tool_calls = msg['tool_calls']
+                                if isinstance(tool_calls, list):
+                                    content_preview = f"Tool calls: {[t.function.name if hasattr(t, 'function') else t['function']['name'] for t in tool_calls]}"
+                                else:
+                                    content_preview = "Tool calls present but not in expected format"
+                            logger.info(f"  {i}: {msg['role']} - {content_preview}")
+                            
+                        logger.info("SYNC: History Messages:")
+                        for i, msg in enumerate(history.messages):
+                            logger.info(f"  {i}: {msg['type']} - {msg.get('content', '')[:50]}...")
+                        
+                        # Rebuild messages from history
                     new_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
                     
-                    # Add all messages from history
                     for msg in history.messages:
-                        if msg["type"] == "human":
-                            new_messages.append({"role": "user", "content": msg["content"]})
-                        elif msg["type"] == "ai":
-                            new_messages.append({"role": "assistant", "content": msg["content"]})
-                    
-                    # Replace the messages array
+                            if msg['type'] == 'human':
+                                new_messages.append({"role": "user", "content": msg['content']})
+                            elif msg['type'] == 'ai':
+                                if msg.get('tool_calls'):
+                                    # Handle tool calls in the correct format
+                                    tool_calls = msg['tool_calls']
+                                    formatted_tool_calls = []
+                                    for tool_call in tool_calls:
+                                        if isinstance(tool_call, dict):
+                                            formatted_tool_calls.append({
+                                                "id": tool_call.get('id', str(uuid.uuid4())),
+                                                "type": "function",
+                                                "function": {
+                                                    "name": tool_call['function']['name'],
+                                                    "arguments": tool_call['function']['arguments']
+                                                }
+                                            })
+                                    new_messages.append({
+                                        "role": "assistant",
+                                        "content": None,
+                                        "tool_calls": formatted_tool_calls
+                                    })
+                                else:
+                                    new_messages.append({"role": "assistant", "content": msg['content']})
+                            elif msg['type'] == 'tool':
+                                new_messages.append({
+                                    "role": "tool",
+                                    "content": msg.get('content'),
+                                    "tool_call_id": msg.get('tool_call_id'),
+                                    "name": msg.get('name')
+                                })
+                        
+                        # Update the session messages
                     self.messages_by_session[session_id] = new_messages
-                    logger.info(f"✅ Rebuilt OpenAI messages for session {session_id} - now {len(new_messages)} messages")
-                
-                return self.messages_by_session[session_id]
+                    logger.info(f"SYNC: Rebuilt messages - new count: {len(new_messages)}")
+                    return self.messages_by_session[session_id]
+                    
+                    return messages
+                except Exception as e:
+                    logger.error(f"SYNC ERROR: Failed to sync session history: {str(e)}", exc_info=True)
+                    # Return default messages if sync fails
+                    return [{"role": "system", "content": SYSTEM_PROMPT}]
+            
+            def add_message_to_history(self, session_id: str, message: dict):
+                """Helper method to add a message to both OpenAI messages and chat history"""
+                try:
+                    # Get current messages
+                    if session_id not in self.messages_by_session:
+                        self.messages_by_session[session_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
+                    messages = self.messages_by_session[session_id]
+                    
+                    # Get history
+                    history = get_session_history(session_id)
+                    
+                    # Add to appropriate history based on role/type
+                    if message['role'] == 'user':
+                        history.add_user_message(message['content'])
+                        messages.append(message)
+                    elif message['role'] == 'assistant':
+                        if message.get('tool_calls'):
+                            # Store tool calls in history
+                            history.add_ai_message(message['content'] or "", tool_calls=message['tool_calls'])
+                        else:
+                            history.add_ai_message(message['content'])
+                        messages.append(message)
+                    elif message['role'] == 'tool':
+                        history.add_tool_message(message['name'], message['content'], message.get('tool_call_id'))
+                        messages.append(message)
+                        
+                    # Update session messages
+                    self.messages_by_session[session_id] = messages
+                    
+                except Exception as e:
+                    logger.error(f"Error adding message to history: {str(e)}", exc_info=True)
             
             def invoke(self, data, **kwargs):
                 """Process a user message and return a response"""
@@ -528,129 +660,30 @@ def chat_engine():
                 user_message = data.get('input', '')
                 session_id = data.get('session_id', str(uuid.uuid4()))
                 
-                # Get config from kwargs if provided (ignore if not used)
+                # Get config from kwargs if provided
                 config = kwargs.get('config', {})
-                
-                # Extract configurable options and callbacks
-                configurable = config.get('configurable', {})
                 callbacks = config.get('callbacks', [])
                 
                 # Get or initialize message history for this session
-                if session_id not in self.messages_by_session:
-                    self.messages_by_session[session_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
-                
-                messages = self.messages_by_session[session_id]
-                
-                # Add user message to history
-                messages.append({"role": "user", "content": user_message})
-                
-                # Also add to ChatHistory object
-                history = get_session_history(session_id)
-                history.add_user_message(user_message)
-                
-                # Sync the message histories to ensure consistency
                 messages = self.sync_session_history(session_id)
                 
-                # Get existing patient data if available
+                # Get history and patient data
+                history = get_session_history(session_id)
                 patient_data = history.get_patient_data()
                 
-                # Check if this is a short confirmation message and we have previous symptom analysis
-                confirmation_terms = ["ok", "yes", "sure", "okay", "alright", "fine", "go ahead", "proceed"]
-                is_confirmation = user_message.lower().strip() in confirmation_terms
-                
-                # If this is a confirmation and we have symptom analysis + location, trigger doctor search
-                if is_confirmation and history.get_symptom_analysis() and patient_data and patient_data.get("Location"):
-                    symptom_analysis = history.get_symptom_analysis()
-                    location = patient_data.get("Location")
-                    
-                    # Check if symptom analysis has specialties
-                    if symptom_analysis and "specialties" in symptom_analysis and symptom_analysis["specialties"]:
-                        specialties = symptom_analysis["specialties"]
-                        top_specialty = specialties[0] if specialties else None
-                        
-                        if top_specialty and top_specialty.get("specialty"):
-                            specialty_name = top_specialty.get("specialty")
-                            subspecialty = top_specialty.get("subspecialty", "")
-                            
-                            # Create a structured search query
-                            search_query = f"find a {specialty_name}"
-                            if subspecialty:
-                                search_query += f" {subspecialty}"
-                            search_query += f" specialist in {location}"
-                            
-                            logger.info(f"🔍 Auto-triggering doctor search after confirmation: '{search_query}'")
-                            
-                            # Execute the search and add the results to a system message
-                            try:
-                                # Create a structured criteria JSON
-                                structured_criteria = {
-                                    "speciality": specialty_name,
-                                    "location": location
-                                }
-                                
-                                if subspecialty:
-                                    structured_criteria["subspeciality"] = subspecialty
-                                    
-                                # Convert criteria to JSON string
-                                criteria_json = json.dumps(structured_criteria)
-                                
-                                # Execute the doctor search with structured criteria
-                                logger.info(f"🔍 Searching with structured criteria after confirmation: {criteria_json}")
-                                search_result = dynamic_doctor_search(criteria_json)
-                                
-                                validated_result = validate_doctor_result(search_result, history.get_patient_data())
-                                logger.info(f"✅ Validated doctor search result: {json.dumps(validated_result)[:100]}...")
-                                
-                                # Record the execution in history
-                                history.add_tool_execution("search_doctors_dynamic", {
-                                    **validated_result,
-                                    "doctors": search_result.get("data", {}).get("doctors", [])
-                                })
-                                
-                                # Get doctor details from the validated result
-                                doctor_count = validated_result.get("doctor_count", 0)
-                                doctor_details = validated_result.get("doctor_details", "")
-                                
-                                # Create a comprehensive message with doctor information
-                                doctor_message = f"Based on your symptoms, I've found {doctor_count} {validated_result.get('specialty', 'dental')} specialists in {location}.{doctor_details}"
-                                
-                                # Also add a system message to ensure the AI includes doctor details in its response
-                                system_message = f"""The doctor search found {doctor_count} specialists.
-
-DO NOT include doctor details in your response. Simply acknowledge that you found specialists and that the frontend will display them.
-Example: "I found some {validated_result.get('specialty', 'medical')} specialists in {location} that can help with your condition."
-
-The frontend will display these doctors using the following JSON data (DO NOT include this in your message):
-```json
-{json.dumps(validated_result.get('doctors', []), indent=2)}
-```"""
-                                
-                                messages.append({
-                                    "role": "system",
-                                    "content": system_message
-                                })
-                                
-                                logger.info(f"✅ Automatic doctor search completed successfully")
-                            except Exception as e:
-                                logger.error(f"❌ Error in doctor search after confirmation: {str(e)}")
-                                messages.append({
-                                    "role": "system",
-                                    "content": "The system attempted to search for doctors but encountered an error. Please ask the user if they would like to search for a doctor."
-                                })
+                # Add user message using helper method
+                self.add_message_to_history(session_id, {"role": "user", "content": user_message})
                 
                 try:
                     # Call OpenAI API with message history and tools
                     logger.info(f"🔄 Calling OpenAI API for session {session_id}")
-                    
-                    # Use callbacks if provided in config
-                    response_model = "gpt-4o-mini-2024-07-18"
                     
                     # Log any callbacks for debugging
                     if callbacks:
                         logger.info(f"Using {len(callbacks)} provided callbacks")
                         
                     response = client.chat.completions.create(
-                        model=response_model,
+                        model="gpt-4o-mini-2024-07-18",
                         messages=messages,
                         tools=self.tools,
                         tool_choice="auto"
@@ -668,6 +701,14 @@ The frontend will display these doctors using the following JSON data (DO NOT in
                         for tool_call in response_message.tool_calls:
                             function_name = tool_call.function.name
                             function_args = json.loads(tool_call.function.arguments)
+                            
+                            # Display tool call header
+                            tool_header = f"""
+================================================================================
+============================== TOOL CALL: {function_name.upper()} ==============================
+================================================================================
+"""
+                            logger.info(tool_header)
                             
                             # Process different tool types
                             if function_name == "store_patient_details":
@@ -690,125 +731,33 @@ The frontend will display these doctors using the following JSON data (DO NOT in
                                 
                             elif function_name == "search_doctors_dynamic":
                                 logger.info(f"🔍 Searching for doctors: {function_args}")
+                                search_query = function_args.get('user_message', '')
                                 
-                                # Get the user message from the function arguments
-                                user_query = function_args.get('user_message', '')
-                                logger.info(f"🔍 User query for doctor search: '{user_query}'")
-                                
-                                # Check if we should use symptom analysis for this search
+                                # Check if we should use symptom analysis
                                 symptom_analysis = history.get_symptom_analysis()
                                 has_symptom_analysis = symptom_analysis is not None
                                 
-                                # Log the symptom context if available
                                 if has_symptom_analysis:
                                     logger.info(f"✅ Using symptom analysis for doctor search: {json.dumps(symptom_analysis)[:100]}...")
                                 
-                                # Check for explicit doctor search terms
-                                search_terms = [
-                                    "find doctor", "find a doctor", "looking for doctor", 
-                                    "need a doctor", "recommend doctor", "search for doctor",
-                                    "doctor near", "specialist near", "need specialist",
-                                    # Add specialty-specific terms
-                                    "find dentist", "find a dentist", "looking for dentist",
-                                    "need a dentist", "dentist near", "find dental",
-                                    # Add generic search terms
-                                    "find specialist", "find a specialist", "looking for specialist",
-                                    "find a clinic", "find clinic", "looking for clinic"
-                                ]
-                                
-                                # Check if any search term is in the query
-                                explicit_doctor_search = False
-                                for term in search_terms:
-                                    if term in user_query.lower():
-                                        explicit_doctor_search = True
-                                        logger.info(f"✅ Found explicit doctor search term: '{term}' in query")
-                                        break
-                                
-                                # Check if this is a confirmation of a previous request
-                                is_confirmation = user_query.lower() in ["yes", "yeah", "yep", "sure", "find one", "please do", "go ahead"]
-                                
-                                # Check if we have location info
-                                location = None
-                                if patient_data and patient_data.get('Location'):
-                                    location = patient_data.get('Location')
-                                    logger.info(f"✅ Using location from patient data: {location}")
-                                else:
-                                    location = detect_location_in_query(user_query)
-                                    if location:
-                                        logger.info(f"✅ Detected location from query: {location}")
-                                        
-                                        # Store location in patient data
-                                        if patient_data is None:
-                                            patient_data = {}
-                                        
-                                        # Update patient data with detected location
-                                        location_data = {"Location": location}
-                                        history.set_patient_data(location_data)
-                                        
-                                        # Call store_patient_details tool to ensure it's recorded properly
-                                        try:
-                                            location_result = store_patient_details(session_id=session_id, Location=location)
-                                            logger.info(f"✅ Stored location from query: {location}")
-                                            history.add_tool_execution("store_patient_details", location_result)
-                                        except Exception as e:
-                                            logger.error(f"❌ Error storing location: {str(e)}")
-                                
-                                # Allow search if it's either an explicit search or a confirmation with previous symptom analysis
-                                if not (explicit_doctor_search or (is_confirmation and has_symptom_analysis)):
-                                    logger.warning(f"⚠️ Doctor search requested but query doesn't contain explicit doctor search terms: '{user_query}'")
-                                    tool_results.append({
-                                        "tool_call_id": tool_call.id,
-                                        "role": "tool",
-                                        "name": function_name,
-                                        "content": json.dumps({
-                                            "message": "I'm not sure if you're looking for a doctor. If you'd like me to find a doctor for you, please let me know what type of doctor you need.",
-                                            "error": "No explicit doctor search request detected"
-                                        })
-                                    })
-                                    continue
-                                
-                                if not location:
-                                    logger.warning(f"⚠️ Doctor search requested but no location available")
-                                    tool_results.append({
-                                        "tool_call_id": tool_call.id,
-                                        "role": "tool",
-                                        "name": function_name,
-                                        "content": json.dumps({
-                                            "message": "To help you find the right doctor, I need to know your location. Could you please tell me which city you're in?",
-                                            "error": "Location required for doctor search"
-                                        })
-                                    })
-                                    continue
-                                
-                                # Build search query using available information
-                                search_query = user_query
-                                
-                                # If we have symptom analysis, use the detected specialties
-                                if has_symptom_analysis and "specialties" in symptom_analysis and symptom_analysis["specialties"]:
-                                    top_specialty = symptom_analysis["specialties"][0] if symptom_analysis["specialties"] else None
-                                    
-                                    if top_specialty and top_specialty.get("name"):
-                                        specialty_name = top_specialty.get("name")
-                                        # Create a structured search query with specialty info
-                                        search_query = f"find a {specialty_name} specialist in {location}"
-                                        logger.info(f"✅ Created structured search query using symptom analysis: '{search_query}'")
-                                # Otherwise, use the user query and make sure location is included
-                                elif location and location.lower() not in user_query.lower():
-                                    search_query = f"find a doctor in {location} for {user_query}"
-                                    logger.info(f"✅ Added location to search query: '{search_query}'")
-                                
-                                # Call doctor search
+                                # Execute search
                                 try:
-                                    logger.info(f"🔍 Executing doctor search with query: '{search_query}'")
                                     search_result = dynamic_doctor_search(search_query)
-                                    logger.info(f"✅ Doctor search completed successfully with result type: {type(search_result)}")
-                                    
-                                    if not isinstance(search_result, dict):
-                                        logger.error(f"❌ Unexpected result type from doctor search: {type(search_result)}")
-                                        raise ValueError(f"Expected dict result, got {type(search_result)}")
-                                    
                                     validated_result = validate_doctor_result(search_result, patient_data)
-                                    logger.info(f"✅ Validated doctor search result: {json.dumps(validated_result)[:100]}...")
+                                    
+                                    # Ensure the message doesn't include detailed doctor information
+                                    if "message" in validated_result:
+                                        # Extract doctor count and specialty
+                                        doctor_count = validated_result.get("doctor_count", 0)
+                                        specialty = validated_result.get("specialty", "doctors")
+                                        location = validated_result.get("location", "")
+                                        
+                                        # Create a simple message without doctor details
+                                        location_text = f" in {location}" if location else ""
+                                        if doctor_count > 0:
+                                            validated_result["message"] = f"I found {doctor_count} {specialty} specialists{location_text} based on your search."
+                                        else:
+                                            validated_result["message"] = f"I couldn't find any {specialty} specialists{location_text} matching your criteria."
                                     
                                     # Record the execution in history
                                     history.add_tool_execution("search_doctors_dynamic", {
@@ -816,11 +765,6 @@ The frontend will display these doctors using the following JSON data (DO NOT in
                                         "doctors": search_result.get("data", {}).get("doctors", [])
                                     })
                                     
-                                    # Get doctor details from the validated result
-                                    doctor_count = validated_result.get("doctor_count", 0)
-                                    doctor_details = validated_result.get("doctor_details", "")
-                                    
-                                    # Add the formatted result to tool results
                                     tool_results.append({
                                         "tool_call_id": tool_call.id,
                                         "role": "tool",
@@ -828,21 +772,6 @@ The frontend will display these doctors using the following JSON data (DO NOT in
                                         "content": json.dumps(validated_result)
                                     })
                                     
-                                    # Also add a system message to ensure the AI includes doctor details in its response
-                                    system_message = f"""The doctor search found {doctor_count} specialists.
-
-DO NOT include doctor details in your response. Simply acknowledge that you found specialists and that the frontend will display them.
-Example: "I found some {validated_result.get('specialty', 'medical')} specialists in {location} that can help with your condition."
-
-The frontend will display these doctors using the following JSON data (DO NOT include this in your message):
-```json
-{json.dumps(validated_result.get('doctors', []), indent=2)}
-```"""
-                                    
-                                    messages.append({
-                                        "role": "system",
-                                        "content": system_message
-                                    })
                                 except Exception as e:
                                     logger.error(f"❌ Error in doctor search: {str(e)}")
                                     tool_results.append({
@@ -850,117 +779,72 @@ The frontend will display these doctors using the following JSON data (DO NOT in
                                         "role": "tool",
                                         "name": function_name,
                                         "content": json.dumps({
-                                            "message": "I'm sorry, I encountered an issue while searching for doctors. Please try again with more specific information.",
+                                            "message": "Error searching for doctors",
                                             "error": str(e)
                                         })
                                     })
                                 
                             elif function_name == "analyze_symptoms":
                                 logger.info(f"🩺 Analyzing symptoms: {function_args}")
-                                
-                                # Check if this is a valid symptom description with enough detail
                                 symptom_description = function_args.get('symptom_description', '')
-                                
-                                # Basic validation - ensure the symptom description has some minimum detail
-                                if len(symptom_description.split()) < 3:
-                                    logger.warning(f"⚠️ Symptom analysis requested but description too short: '{symptom_description}'")
-                                    tool_results.append({
-                                        "tool_call_id": tool_call.id,
-                                        "role": "tool",
-                                        "name": function_name,
-                                        "content": json.dumps({
-                                            "message": "To help identify the right medical specialty, could you please describe your symptoms or health concerns in more detail?",
-                                            "error": "Insufficient symptom description"
-                                        })
-                                    })
-                                    continue
                                 
                                 # Call symptom analysis
                                 symptom_result = analyze_symptoms(symptom_description)
                                 
+                                # Log entire symptom_result structure
+                                logger.info(f"DEBUG AGENT: Symptom result type: {type(symptom_result)}")
+                                if isinstance(symptom_result, dict):
+                                    logger.info(f"DEBUG AGENT: Symptom result keys: {list(symptom_result.keys())}")
+                                    for key in symptom_result.keys():
+                                        logger.info(f"DEBUG AGENT: Value type for key '{key}': {type(symptom_result[key])}")
+                                
                                 # Store symptom analysis in history
                                 history.set_symptom_analysis(symptom_result)
-                                logger.info(f"✅ Stored symptom analysis in session history: {json.dumps(symptom_result)[:100]}...")
+                                logger.info(f"DEBUG AGENT: Stored symptom analysis in session history")
                                 
                                 # Extract specialties for potential doctor search
                                 specialties = []
-                                if symptom_result and "specialties" in symptom_result:
-                                    specialties = symptom_result.get("specialties", [])
-                                    
-                                if specialties:
-                                    top_specialty = specialties[0] if len(specialties) > 0 else None
-                                    logger.info(f"✅ Top specialty detected: {top_specialty}")
-                                    
-                                    # If we have patient data with Location, prepare for potential doctor search
-                                    if history.get_patient_data() and history.get_patient_data().get("Location"):
-                                        location = history.get_patient_data().get("Location")
-                                        logger.info(f"✅ Location available for potential doctor search: {location}")
+                                logger.info(f"DEBUG AGENT: About to extract specialties from symptom_result")
+                                
+                                if symptom_result:
+                                    # Try multiple possible keys where specialties might be stored
+                                    if "specialties" in symptom_result:
+                                        logger.info(f"DEBUG AGENT: Found 'specialties' key in symptom_result")
+                                        specialties = symptom_result.get("specialties", [])
+                                        logger.info(f"DEBUG AGENT: specialties from symptom_result.specialties: {specialties}")
+                                    elif "detailed_analysis" in symptom_result and "specialties" in symptom_result["detailed_analysis"]:
+                                        logger.info(f"DEBUG AGENT: Found 'detailed_analysis.specialties' in symptom_result")
+                                        specialties = symptom_result["detailed_analysis"]["specialties"]
+                                        logger.info(f"DEBUG AGENT: specialties from detailed_analysis.specialties: {specialties}")
+                                    elif "detailed_analysis" in symptom_result and "symptom_analysis" in symptom_result["detailed_analysis"]:
+                                        sa = symptom_result["detailed_analysis"]["symptom_analysis"]
+                                        logger.info(f"DEBUG AGENT: Examining symptom_analysis in detailed_analysis")
+                                        logger.info(f"DEBUG AGENT: symptom_analysis keys: {list(sa.keys()) if isinstance(sa, dict) else 'Not a dict'}")
                                         
-                                        # Automatically trigger doctor search with specialty information
-                                        if top_specialty and top_specialty.get("specialty"):
-                                            specialty_name = top_specialty.get("specialty")
-                                            subspecialty = top_specialty.get("subspecialty", "")
-                                            
-                                            # Create a structured search query
-                                            search_query = f"find a {specialty_name}"
-                                            if subspecialty:
-                                                search_query += f" {subspecialty}"
-                                            search_query += f" specialist in {location}"
-                                            
-                                            logger.info(f"🔍 Automatically triggering doctor search after symptom analysis: '{search_query}'")
-                                            
-                                            try:
-                                                # Create a structured criteria JSON
-                                                structured_criteria = {
-                                                    "speciality": specialty_name,
-                                                    "location": location
-                                                }
+                                        if "recommended_specialties" in sa:
+                                            logger.info(f"DEBUG AGENT: Found 'recommended_specialties' in symptom_analysis")
+                                            specialties = sa["recommended_specialties"]
+                                            logger.info(f"DEBUG AGENT: specialties from recommended_specialties: {specialties}")
+                                        elif "matched_specialties" in sa:
+                                            logger.info(f"DEBUG AGENT: Found 'matched_specialties' in symptom_analysis")
+                                            specialties = sa["matched_specialties"]
+                                            logger.info(f"DEBUG AGENT: specialties from matched_specialties: {specialties}")
+                                else:
+                                    logger.info(f"DEBUG AGENT: symptom_result is falsy: {symptom_result}")
                                                 
-                                                if subspecialty:
-                                                    structured_criteria["subspeciality"] = subspecialty
-                                                    
-                                                # Convert criteria to JSON string
-                                                criteria_json = json.dumps(structured_criteria)
-                                                
-                                                # Execute the doctor search with structured criteria
-                                                logger.info(f"🔍 Searching with structured criteria after confirmation: {criteria_json}")
-                                                search_result = dynamic_doctor_search(criteria_json)
-                                                
-                                                validated_result = validate_doctor_result(search_result, history.get_patient_data())
-                                                logger.info(f"✅ Validated doctor search result: {json.dumps(validated_result)[:100]}...")
-                                                
-                                                # Record the execution in history
-                                                history.add_tool_execution("search_doctors_dynamic", {
-                                                    **validated_result,
-                                                    "doctors": search_result.get("data", {}).get("doctors", [])
-                                                })
-                                                
-                                                # Get doctor details from the validated result
-                                                doctor_count = validated_result.get("doctor_count", 0)
-                                                doctor_details = validated_result.get("doctor_details", "")
-                                                
-                                                # Create a comprehensive message with doctor information
-                                                doctor_message = f"Based on your symptoms, I've found {doctor_count} {validated_result.get('specialty', 'dental')} specialists in {location}.{doctor_details}"
-                                                
-                                                # Also add a system message to ensure the AI includes doctor details in its response
-                                                system_message = f"""The doctor search found {doctor_count} specialists.
-
-DO NOT include doctor details in your response. Simply acknowledge that you found specialists and that the frontend will display them.
-Example: "I found some {validated_result.get('specialty', 'medical')} specialists in {location} that can help with your condition."
-
-The frontend will display these doctors using the following JSON data (DO NOT include this in your message):
-```json
-{json.dumps(validated_result.get('doctors', []), indent=2)}
-```"""
-                                                
-                                                messages.append({
-                                                    "role": "system",
-                                                    "content": system_message
-                                                })
-                                                
-                                                logger.info(f"✅ Automatic doctor search completed successfully")
-                                            except Exception as e:
-                                                logger.error(f"❌ Error in automatic doctor search: {str(e)}")
+                                # Log what we found
+                                logger.info(f"DEBUG AGENT: Extracted specialties: {specialties}")
+                                logger.info(f"DEBUG AGENT: Specialties type: {type(specialties)}")
+                                logger.info(f"DEBUG AGENT: Specialties length: {len(specialties) if specialties else 0}")
+                                
+                                # Safely log the top specialty if we have any
+                                if specialties and len(specialties) > 0:
+                                    logger.info(f"DEBUG AGENT: About to access first specialty in list")
+                                    top_specialty = specialties[0]
+                                    logger.info(f"DEBUG AGENT: Successfully accessed first specialty")
+                                    logger.info(f"✅ Top specialty detected: {top_specialty}")
+                                else:
+                                    logger.info("⚠️ No specialties detected in symptom analysis")
                                 
                                 tool_results.append({
                                     "tool_call_id": tool_call.id,
@@ -968,6 +852,9 @@ The frontend will display these doctors using the following JSON data (DO NOT in
                                     "name": function_name,
                                     "content": json.dumps(symptom_result)
                                 })
+                            
+                            # Display tool completion footer
+                            logger.info("=" * 80)
                         
                         # Add assistant message with tool calls to history
                         messages.append(response_message.model_dump())
@@ -979,8 +866,32 @@ The frontend will display these doctors using the following JSON data (DO NOT in
                         # Call API again to get final response
                         logger.info("🔄 Calling OpenAI API again to process tool results")
                         
+                        # Check if we have doctor search results to format
+                        last_doctor_result = history.get_latest_doctor_search()
+                        if last_doctor_result and "message" in last_doctor_result:
+                            # Format the message without detailed doctor information
+                            doctor_count = last_doctor_result.get("doctor_count", 0) 
+                            specialty = last_doctor_result.get("specialty", "doctors")
+                            location = last_doctor_result.get("location", "")
+                            
+                            # Add a message to inform that doctor data is available
+                            for i, msg in enumerate(messages):
+                                if msg.get("role") == "tool" and "search_doctors_dynamic" in str(msg.get("name", "")):
+                                    # Create a simple message without doctor details
+                                    location_text = f" in {location}" if location else ""
+                                    if doctor_count > 0:
+                                        simple_message = {
+                                            "message": f"I found {doctor_count} {specialty} specialists{location_text} based on your search.",
+                                            "doctor_count": doctor_count,
+                                            "specialty": specialty,
+                                            "location": location
+                                        }
+                                        # Update the tool message content with simplified info
+                                        messages[i]["content"] = json.dumps(simple_message)
+                                        logger.info("🔄 Simplified doctor search result message")
+                        
                         second_response = client.chat.completions.create(
-                            model=response_model,
+                            model="gpt-4o-mini-2024-07-18",
                             messages=messages
                         )
                         
@@ -990,26 +901,18 @@ The frontend will display these doctors using the following JSON data (DO NOT in
                         # Also add to ChatHistory object
                         history.add_ai_message(final_content)
                         
-                        # Check if we've processed any doctor searches in this conversation
-                        last_doctor_result = history.get_latest_doctor_search()
-                        
-                        # If we have doctor data, include it in the response
+                        # Return appropriate response format
                         if last_doctor_result and "doctors" in last_doctor_result:
-                            logger.info(f"✅ Including {len(last_doctor_result.get('doctors', []))} doctors in response")
-                            response = {
-                                "response": {
-                                    "message": final_content,
-                                    "doctors": last_doctor_result.get("doctors", [])
-                                }
-                            }
-                            logger.info(f"✅ Final response structure: {list(response.keys())}")
-                            return response
-                        else:
-                            logger.info("ℹ️ No doctor data to include in response")
                             return {
-                                "response": {
-                                    "message": final_content
-                                }
+                                "message": final_content,
+                                "patient": patient_data or {"session_id": session_id},
+                                "data": last_doctor_result.get("doctors", [])
+                            }
+                        else:
+                            return {
+                                "message": final_content,
+                                "patient": patient_data or {"session_id": session_id},
+                                "data": []
                             }
                     
                     else:
@@ -1020,46 +923,18 @@ The frontend will display these doctors using the following JSON data (DO NOT in
                         # Also add to ChatHistory object
                         history.add_ai_message(content)
                         
-                        # Check if we've processed any doctor searches in this conversation
-                        last_doctor_result = history.get_latest_doctor_search()
-                        
-                        # If we have doctor data, include it in the response
-                        if last_doctor_result and "doctors" in last_doctor_result:
-                            logger.info(f"✅ Including {len(last_doctor_result.get('doctors', []))} doctors in response")
-                            response = {
-                                "response": {
-                                    "message": content,
-                                    "doctors": last_doctor_result.get("doctors", [])
-                                }
-                            }
-                            logger.info(f"✅ Final response structure: {list(response.keys())}")
-                            return response
-                        else:
-                            logger.info("ℹ️ No doctor data to include in response")
-                            return {
-                                "response": {
-                                    "message": content
-                                }
-                            }
+                        return {
+                                "message": content,
+                            "patient": patient_data or {"session_id": session_id},
+                                "data": []
+                            }    
                 
                 except Exception as e:
                     logger.error(f"❌ Error processing message: {str(e)}", exc_info=True)
-                    # Add a fallback response based on conversation state
-                    fallback_message = "I'm sorry, I encountered an issue processing your request."
-                    
-                    # Check conversation state for more specific fallback
-                    if not patient_data or not patient_data.get("Name"):
-                        fallback_message = "I apologize for the confusion. Could you please tell me your name so I can assist you better?"
-                    elif not patient_data.get("Age"):
-                        fallback_message = f"I apologize for the confusion. Could you please tell me your age, {patient_data.get('Name')}?"
-                    elif not patient_data.get("Location") and "doctor" in user_message.lower():
-                        fallback_message = f"I apologize, but to find doctors for you, I need to know your location. Could you please share which city you're in?"
-                    
-                    messages.append({"role": "assistant", "content": fallback_message})
                     return {
-                        "response": {
-                            "message": fallback_message
-                        }
+                        "message": "I apologize, but I encountered an error processing your request. Could you please try again?",
+                        "patient": patient_data or {"session_id": session_id},
+                        "data": []
                     }
 
         # Initialize engine and return it

@@ -307,6 +307,76 @@ class DB:
             logger.error(f"Failed parameters: {params}")
             return []
 
+    def execute_stored_procedure(self, proc_name: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Execute a stored procedure with parameters
+        
+        Args:
+            proc_name: Name of the stored procedure
+            params: Dictionary of parameter names and values
+            
+        Returns:
+            List of dictionaries containing the result rows
+        """
+        try:
+            logger.info(f"Executing stored procedure {proc_name} with params: {params}")
+            
+            # Build the EXEC statement with proper quoting for string parameters
+            param_parts = []
+            for k, v in params.items():
+                if isinstance(v, str):
+                    # For string parameters, escape any single quotes by doubling them
+                    # and wrap the entire value in single quotes
+                    escaped_value = v.replace("'", "''")
+                    param_parts.append(f"{k}=N'{escaped_value}'")
+                else:
+                    param_parts.append(f"{k}={v}")
+            
+            param_str = ", ".join(param_parts)
+            exec_statement = f"EXEC {proc_name} {param_str}"
+            
+            logger.info(f"Executing SQL: {exec_statement}")
+            
+            # Execute the stored procedure
+            with self.engine.connect() as connection:
+                result = connection.execute(text(exec_statement))
+                
+                # Convert result to list of dictionaries using mappings()
+                rows = [dict(row) for row in result.mappings()]
+                
+                # Convert special types
+                for row in rows:
+                    for key, value in row.items():
+                        if isinstance(value, (datetime.datetime, datetime.date)):
+                            row[key] = value.isoformat()
+                        elif isinstance(value, Decimal):
+                            row[key] = float(value)
+                
+                logger.info(f"Got {len(rows)} results from stored procedure")
+                return rows
+                
+        except Exception as e:
+            logger.error(f"Error executing stored procedure: {str(e)}")
+            return []  # Return empty list instead of raising exception for better error handling
+
+    def execute_query(self, query: str, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+        """
+        Execute a SQL query and return results
+        This is a wrapper around execute_stored_procedure for backward compatibility
+        """
+        if query.strip().upper().startswith("[DBO].[SPDYAMICQUERYBUILDER]"):
+            # Extract stored procedure name and parameters
+            return self.execute_stored_procedure(query, params or {})
+        else:
+            logger.warning("Direct SQL queries are deprecated. Please use stored procedures.")
+            try:
+                with self.engine.connect() as connection:
+                    result = connection.execute(text(query), params or {})
+                    return [dict(row) for row in result]
+            except Exception as e:
+                logger.error(f"Error executing query: {str(e)}")
+                raise
+
 if __name__ == "__main__":
     db = DB()
     specialties = db.get_available_specialties()

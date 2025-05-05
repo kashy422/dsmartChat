@@ -10,9 +10,10 @@ import boto3
 from fastapi.middleware.cors import CORSMiddleware
 import base64
 from .agent import chat_engine
-from .utils import CustomCallBackHandler, thread_local, setup_improved_logging
+from .utils import CustomCallBackHandler, thread_local, setup_improved_logging, log_thread_local_state
 from src.AESEncryptor import AESEncryptor
 from typing import Dict, List, Any, Optional
+from dotenv import load_dotenv
 
 # Import our essential tools and functionality
 from .agent_tools import analyze_symptoms, dynamic_doctor_search, store_patient_details
@@ -56,34 +57,46 @@ except Exception as e:
 app = FastAPI()
 engine = chat_engine()
 callBackHandler = CustomCallBackHandler()
-encryptor = AESEncryptor("BadoBadiBadoBadi") #dont change the salt
-valid_sources = ["www", "wap", "call"]
-os.environ["OPENAI_API_KEY"] = os.getenv("API_KEY")
-# Set AWS credentials and region dynamically
-os.environ["AWS_ACCESS_KEY_ID"] = os.getenv("AWS_ACCESS_KEY_ID")
-os.environ["AWS_SECRET_ACCESS_KEY"] = os.getenv("AWS_SECRET_ACCESS_KEY")
-os.environ["AWS_REGION"] = os.getenv("AWS_REGION")
+encryptor = AESEncryptor(os.getenv("ENCRYPTION_SALT", "default_salt"))
 
-# Create a boto3 session to verify the region
+# Set environment variables - load from .env directly
+load_dotenv()  # This will load variables from .env file
+
+# Get API key from environment with better error handling
+api_key = os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY")
+if not api_key:
+    error_msg = """
+    ⚠️ ERROR: No OpenAI API key found in environment variables.
+    
+    To fix this:
+    1. Create a .env file in the project root if it doesn't exist
+    2. Add your OpenAI API key: OPENAI_API_KEY=your_key_here
+    3. Restart the application
+    
+    Alternatively, you can set the API_KEY or OPENAI_API_KEY environment variable directly.
+    """
+    logger.error(error_msg)
+else:
+    logger.info("✅ OpenAI API key found in environment variables")
+
+# Set environment variables
+os.environ["OPENAI_API_KEY"] = api_key if api_key else ""
+os.environ["AWS_ACCESS_KEY_ID"] = os.getenv("AWS_ACCESS_KEY_ID", "")
+os.environ["AWS_SECRET_ACCESS_KEY"] = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+os.environ["AWS_REGION"] = os.getenv("AWS_REGION", "us-east-1")
+
+# Create a boto3 session
 session = boto3.Session()
-# print("Default region from boto3 session:", session.region_name)
-# Define allowed origins
-origins = [
-    "http://localhost",
-    "http://localhost:8509",
-    "https://draide.itsai.tech",
-    "https://api.dsmart.ai"     # Example: Add frontend URL
-    # Add other origins as needed
-]
 
+# Define allowed origins from environment variable or use defaults
+origins = os.getenv("ALLOWED_ORIGINS", "http://localhost,http://localhost:8509").split(",")
 
-# Create the AWS Polly client with the region explicitly passed
+# Create the AWS Polly client
 try:
     polly_client = boto3.client('polly', region_name=os.environ.get("AWS_REGION"))
-    print("Polly client initialized successfully!")
+    logger.info("Polly client initialized successfully!")
 except Exception as e:
-    print("Error initializing Polly client:", str(e))
-
+    logger.error(f"Error initializing Polly client: {str(e)}")
 
 # Add CORS middleware
 app.add_middleware(
@@ -95,16 +108,14 @@ app.add_middleware(
 )
 
 from openai import OpenAI
-client = OpenAI()
+# Initialize OpenAI client with API key from environment
+client = OpenAI(api_key=api_key)
 
 def get_token_usage(response):
     # Extract token usage from the API response
     token_usage = response['usage']
     tokens_used = token_usage['total_tokens']
     return tokens_used
-
-
-
 
 @app.post("/chat")
 async def chat(
@@ -114,196 +125,195 @@ async def chat(
 ):
     start_time = time.time()
     
-    # Split and validate session_id
     try:
-        split_text = session_id.split('|')
-        if split_text[0] not in valid_sources:
-            raise HTTPException(status_code=400, detail="Invalid request type detected")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error parsing session_id: {str(e)}")
-
-    # Check if an audio file is provided
-    if audio:
-        audio_processing_start = time.time()
-        # Log the MIME type for diagnostic purposes
-        print(f"Received audio MIME type: {audio.content_type}")
-
-        # Check if the file has the expected .wav extension
-        if not audio.filename.lower().endswith(".wav"):
-            raise HTTPException(status_code=400, detail="Invalid file type. Only WAV files are allowed.")
-        
-        # Create a temporary file to store the uploaded WAV file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
-            temp_file_path = temp_file.name
-            contents = await audio.read()  # Read the content of the uploaded file
-            temp_file.write(contents)  # Save the file to the temporary location
-        
-        # Use OpenAI's Whisper model to transcribe the audio file
-        try:
-            transcription_start = time.time()
-            with open(temp_file_path, "rb") as audio_file:
-                transcription = client.audio.transcriptions.create(
-                    model="whisper-1", 
-                    file=audio_file,
-                    response_format="text"
-                )
-            transcription_time = time.time() - transcription_start
-            print(f"Transcription took {transcription_time:.2f}s")
-        
-            # Process the transcription result
-            process_start = time.time()
-            response = process_message(transcription, session_id=split_text[1])
-            processing_time = time.time() - process_start
+        # Handle audio input
+        if audio:
+            if not audio.filename.lower().endswith(".wav"):
+                raise HTTPException(status_code=400, detail="Invalid file type. Only WAV files are allowed.")
             
-            # Collect performance metrics
-            audio_processing_time = time.time() - audio_processing_start
-            total_time = time.time() - start_time
+                # Process audio file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
+                temp_file_path = temp_file.name
+                contents = await audio.read()
+                temp_file.write(contents)
             
-            # If callBackHandler has docs_data, return the data and clear it
-            if callBackHandler.docs_data:
-                response_data = {
-                    "response": callBackHandler.docs_data,
-                    "performance": {
-                        "total_time": round(total_time, 2),
-                        "audio_processing_time": round(audio_processing_time, 2),
-                        "transcription_time": round(transcription_time, 2),
-                        "processing_time": round(processing_time, 2)
+            try:
+                    # Transcribe audio
+                with open(temp_file_path, "rb") as audio_file:
+                    transcription = client.audio.transcriptions.create(
+                        model="whisper-1", 
+                        file=audio_file,
+                        response_format="text"
+                    )
+            
+                    # Process transcribed message
+                    response = process_message(transcription, session_id)
+                    
+                    # Generate audio response
+                audio_base64 = await text_to_speech(response['response']['message'])
+                
+                return {
+                    "response": {
+                        "message": response['response']['message'],
+                        "transcription": transcription,
+                        "Audio_base_64": audio_base64
                     }
                 }
-                callBackHandler.docs_data = []  # Clear the data after it's returned
-                return response_data
-            
-            # Generate TTS if needed
-            tts_start = time.time()
-            audio_base64 = await text_to_speech(response['response']['message'])
-            tts_time = time.time() - tts_start
-            
-            # If no docs_data, return the normal engine response along with audio base64
-            return {
-                "response": {
-                    "message": response['response']['message'],
-                    "transcription": transcription,
-                    "Audio_base_64": audio_base64
-                },
-                "performance": {
-                    "total_time": round(total_time, 2),
-                    "audio_processing_time": round(audio_processing_time, 2),
-                    "transcription_time": round(transcription_time, 2),
-                    "processing_time": round(processing_time, 2),
-                    "tts_time": round(tts_time, 2)
-                }
-            }
-
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error transcribing audio: {str(e)}")
-        finally:
-            # Clean up the temporary file after processing
-            if os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
-    
-    # Process the request as a text message if no audio file is provided
-    if message:
-        # Process the message and generate a response
-        process_start = time.time()
-        response = process_message(message, session_id=split_text[1])
-        processing_time = time.time() - process_start
-        total_time = time.time() - start_time
+            finally:
+                if os.path.exists(temp_file_path):
+                    os.remove(temp_file_path)
         
-        # Check if this is a doctor search result with data field
-        if isinstance(response, dict) and 'data' in response and 'doctors' in response.get('data', {}):
-            print(f"DEBUG: Detected direct doctor search result with {len(response['data']['doctors'])} doctors")
+            # Handle text input
+        if message:
+                response = process_message(message, session_id)
+                return response
             
-            # Special handling for doctor data to ensure proper format separation
-            doctors_data = response['data']['doctors']
-            doctor_count = len(doctors_data)
+    except Exception as e:
+        logger.error(f"Error in chat endpoint: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+def process_message(message: str, session_id: str) -> dict:
+    """Process incoming message by sending it to the agent"""
+    try:
+        # Clear any previous session data that might be lingering in thread_local
+        if hasattr(thread_local, 'session_id') and thread_local.session_id != session_id:
+            logger.info(f"Switching from session {thread_local.session_id} to {session_id}")
+            # Log current state before clearing
+            log_thread_local_state(logger, thread_local.session_id)
+            # Clear previous session data
+            for attr in ['symptom_analysis', 'location', 'last_search_results', 'extracted_criteria']:
+                if hasattr(thread_local, attr):
+                    logger.info(f"Clearing previous {attr} data from thread_local")
+                    delattr(thread_local, attr)
+        
+        # Set current session_id
+        thread_local.session_id = session_id
+        logger.info(f"Processing message for session {session_id}")
+        
+        # Log current thread_local state
+        log_thread_local_state(logger, session_id)
+
+        # Check if we have a stored symptom analysis for this session
+        symptom_analysis = getattr(thread_local, 'symptom_analysis', None)
+        location = getattr(thread_local, 'location', None)
             
-            # Extract specialty information
-            specialty = "doctors"
-            if 'data' in response and 'criteria' in response['data'] and 'speciality' in response['data'].get('criteria', {}):
-                specialty = response['data']['criteria']['speciality']
+        # If we have symptom analysis but no location, this might be a location response
+        if symptom_analysis and not location and not any(keyword in message.lower() for keyword in ['pain', 'hurt', 'ache', 'symptoms']):
+            logger.info(f"Detected location response for previous symptom analysis")
+            thread_local.location = message
+            # Now we can search for doctors
+            try:
+                logger.info("DEBUG API: About to access symptom_analysis for doctor search")
+                logger.info(f"DEBUG API: symptom_analysis keys: {list(symptom_analysis.keys()) if isinstance(symptom_analysis, dict) else 'Not a dict'}")
+            
+                # Detailed debugging of the structure
+                if isinstance(symptom_analysis, dict) and "symptom_analysis" in symptom_analysis:
+                    sa = symptom_analysis.get("symptom_analysis", {})
+                    logger.info(f"DEBUG API: symptom_analysis.symptom_analysis keys: {list(sa.keys()) if isinstance(sa, dict) else 'Not a dict'}")
+                    
+                    if "matched_specialties" in sa:
+                        matched = sa["matched_specialties"]
+                        logger.info(f"DEBUG API: matched_specialties type: {type(matched)}")
+                        logger.info(f"DEBUG API: matched_specialties length: {len(matched) if matched else 0}")
+                        if matched and len(matched) > 0:
+                            logger.info(f"DEBUG API: First matched specialty: {matched[0]}")
                 
-            # Extract location information
-            location = ""
-            if 'data' in response and 'criteria' in response['data'] and 'location' in response['data'].get('criteria', {}):
-                location = response['data']['criteria']['location']
-                location_text = f" in {location}"
-            else:
-                location_text = ""
-            
-            # Replace any detailed doctor description in the message with a simple summary
-            # This ensures proper separation between UI components
-            clean_message = f"I found {doctor_count} {specialty} specialists{location_text} that match your criteria."
-            
-            # Check if the message has detailed doctor information and replace it
-            current_message = response.get('message', '')
-            if current_message and (
-                "rating" in current_message.lower() or 
-                "fee" in current_message.lower() or
-                "clinic" in current_message.lower() or
-                "**" in current_message or
-                "-" in current_message or
-                any(f"{i}." in current_message for i in range(1, 10))
-            ):
-                print(f"DEBUG: Replacing detailed doctor information in message with clean summary")
-                response['message'] = clean_message
-                print(f"DEBUG: Clean message: {clean_message}")
-            elif not current_message:
-                response['message'] = clean_message
+                # Safely get specialty information
+                matched_specialties = []
+                if isinstance(symptom_analysis, dict) and "symptom_analysis" in symptom_analysis:
+                    sa = symptom_analysis.get("symptom_analysis", {})
+                    if "matched_specialties" in sa and sa["matched_specialties"]:
+                        matched_specialties = sa["matched_specialties"]
+                    elif "recommended_specialties" in sa and sa["recommended_specialties"]:
+                        matched_specialties = sa["recommended_specialties"]
+                    elif "specialties" in sa and sa["specialties"]:
+                        matched_specialties = sa["specialties"]
                 
-            # Update the conversation history in the engine to maintain context
-            engine.invoke(
-                {
-                    "input": "__update_history__", 
-                    "session_id": session_id, 
-                    "message": response['message']
-                },
+                # Only try to access the first item if the list is not empty
+                specialty_info = None
+                if matched_specialties and len(matched_specialties) > 0:
+                    specialty_info = matched_specialties[0]
+                    logger.info(f"DEBUG API: Using specialty info: {specialty_info}")
+                else:
+                    logger.warning("DEBUG API: No matched specialties found")
+                    # Default to general practitioner if no specialties found
+                    specialty_info = {"specialty": "General Practice", "subspecialty": ""}
+                
+                # Create a string search query that includes location and specialty
+                import json
+                search_data = {
+                    "location": message,
+                    "specialty": specialty_info
+                }
+                # Convert to JSON string for dynamic_doctor_search
+                search_query = json.dumps(search_data)
+                logger.info(f"DEBUG API: Converted search parameters to JSON string: {search_query}")
+                
+                # Call with string parameter as expected by the function definition
+                doctor_search_result = dynamic_doctor_search(search_query)
+                return doctor_search_result
+            except Exception as e:
+                logger.error(f"DEBUG API: Error accessing symptom_analysis: {str(e)}", exc_info=True)
+                # Fallback to a simple location search
+                import json
+                # Create a simple search with just location
+                simple_search = json.dumps({"location": message})
+                logger.info(f"DEBUG API: Falling back to simple location search: {simple_search}")
+                doctor_search_result = dynamic_doctor_search(simple_search)
+                return doctor_search_result
+
+        # Forward the message to the agent and get response
+        response = engine.invoke(
+            {"input": message, "session_id": session_id},
                 config={
                     "configurable": {"session_id": session_id},
                     "callbacks": [callBackHandler]
                 }
             )
-            print(f"DEBUG: Updated conversation history with message: '{response['message']}'")
-            
-            # Ensure standard format with status field
-            if 'status' not in response:
-                response['status'] = 'success'
-            
-            # Add processing time
-            response['processing_time'] = time.time() - start_time
-            
-            # Log the final doctor search result structure 
-            print(f"DEBUG: Returning doctor search result with structure: {list(response.keys())}")
-            print(f"DEBUG: Data field contains: {list(response['data'].keys()) if 'data' in response else 'None'}")
-            
-            return response
-        
-        # If callBackHandler has docs_data, return the data and clear it
-        if callBackHandler.docs_data:
-            response_data = {
-                "response": callBackHandler.docs_data,
-                "performance": {
-                    "total_time": round(total_time, 2),
-                    "processing_time": round(processing_time, 2)
-                }
-            }
-            callBackHandler.docs_data = []  # Clear the data after it's returned
-            return response_data
-        
-        # Include processing time in the response
-        response_with_metrics = response
-        response_with_metrics["performance"] = {
-            "total_time": round(total_time, 2),
-            "processing_time": round(processing_time, 2)
-        }
-        
-        # Return the response as is since it's already in the correct format
-        return response_with_metrics
-    
-    # If neither audio nor message is provided, raise an error
-    raise HTTPException(status_code=400, detail="Either a message or an audio file must be provided.")
 
+        # Log thread_local state after processing
+        logger.info("Thread local state after processing:")
+        log_thread_local_state(logger, session_id)
+            
+        # If the response contains symptom analysis, store it for the session
+        if isinstance(response, dict) and response.get("symptom_analysis"):
+            thread_local.symptom_analysis = response
+            # Don't return the raw response, let the agent handle it
+            return {"response": response}
+        
+        # If we have a response with doctor data, ensure the message doesn't include doctor details
+        if isinstance(response, dict) and isinstance(response.get("response"), dict) and "data" in response["response"]:
+            doctor_data = response["response"]["data"]
+            # If there are doctors in the data array
+            if isinstance(doctor_data, list) and len(doctor_data) > 0:
+                # Extract message details
+                message = response["response"].get("message", "")
+                
+                # Check if message contains detailed doctor information
+                if "Dr." in message or "doctor" in message.lower() or "clinic" in message.lower() or "branch" in message.lower() or "fee" in message.lower():
+                    # Replace with a simple message
+                    doctor_count = len(doctor_data)
+                    simple_message = f"I found {doctor_count} doctors based on your search."
+                    
+                    # Try to extract specialty information
+                    specialty = None
+                    for doc in doctor_data:
+                        if doc.get("Speciality"):
+                            specialty = doc.get("Speciality")
+                            break
+                    
+                    if specialty:
+                        simple_message = f"I found {doctor_count} {specialty} specialists based on your search."
+                    
+                    # Update the message
+                    response["response"]["message"] = simple_message
+                    logger.info(f"Simplified doctor search result message: {simple_message}")
+        
+        return {"response": response}
 
-
+    except Exception as e:
+        logger.error(f"Error processing message: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 class ImageRequest(BaseModel):
     base64_image: str  # Expecting a base64-encoded image string
@@ -352,73 +362,35 @@ async def analyze_image(request: ImageRequest):
 def read_root():
     return {"response": "Hello World"}
 
-
-
 @app.post("/reset")
-def reset():
-    engine.history_messages_key = []
-
-
-def process_message(message: str, session_id: str) -> dict["str", "str"]:
-    """
-    Process a user message and return an AI response.
-    
-    Args:
-        message: The user message to process
-        session_id: The session ID for the conversation
-        
-    Returns:
-        A dictionary containing the AI response
-    """
-    logger = logging.getLogger(__name__)
-    start_time = time.time()
-    
+async def reset(session_id: str = Form(...)):
+    """Reset a specific session, clearing all history and thread_local data"""
     try:
-        # Log the incoming message and session
-        thread_local.session_id = session_id
-        logger.info(f"Processing message: '{message}' for session {session_id}")
+        logger.info(f"Resetting session {session_id}")
         
-        # Check for direct doctor search queries
-        if any(term in message.lower() for term in ["find doctor", "find a doctor", "doctor near", "looking for doctor"]):
-            logger.info(f"Direct doctor search detected: '{message}'")
-            search_result = dynamic_doctor_search({"user_message": message})
-            error_time = time.time() - start_time
-            logger.info(f"Doctor search completed in {error_time:.2f}s")
-            return search_result
+        # Reset engine history for this session if it exists
+        from .agent import store
+        if session_id in store:
+            logger.info(f"Clearing chat history for session {session_id}")
+            store[session_id].clear()
+            del store[session_id]
         
-        # Check for direct symptom analysis
-        if "what could" in message.lower() and "symptom" in message.lower():
-            logger.info(f"Direct symptom analysis detected: '{message}'")
-            symptom_result = analyze_symptoms({"symptom_description": message})
-            error_time = time.time() - start_time
-            logger.info(f"Symptom analysis completed in {error_time:.2f}s")
-            return {"response": {"message": symptom_result["message"]}}
+        # Reset thread_local data if it matches this session
+        if hasattr(thread_local, 'session_id') and thread_local.session_id == session_id:
+            logger.info(f"Clearing thread_local data for session {session_id}")
+            # Log current state before clearing
+            log_thread_local_state(logger, session_id)
+            # Clear all session-specific attributes
+            for attr in dir(thread_local):
+                if not attr.startswith('_'):
+                    logger.info(f"Deleting thread_local.{attr}")
+                    delattr(thread_local, attr)
         
-        # Time the AI invocation
-        invoke_start = time.time()
-        response = engine.invoke(
-            {"input": message, "session_id": session_id},
-            config={
-                "configurable": {"session_id": session_id},
-                "callbacks": [callBackHandler]
-            }
-        )
-        invoke_time = time.time() - invoke_start
-        
-        error_time = time.time() - start_time
-        logger.info(f"Message processed in {error_time:.2f}s")
-        return {"response": response}
-        
+        return {"status": "success", "message": f"Session {session_id} has been reset"}
     except Exception as e:
-        error_time = time.time() - start_time
-        logger.error(f"Error processing message: {str(e)}", exc_info=True)
-        print(f"Error in process_message after {error_time:.2f}s: {str(e)}")
+        logger.error(f"Error resetting session {session_id}: {str(e)}")
+        return {"status": "error", "message": str(e)}
         
-        # Provide a fallback response
-        return {"response": {"message": "I'm sorry, I encountered an issue processing your request. Please try again."}}
-
-
-#
 async def text_to_speech(text: str) -> str:
     try:
         # Use Polly to synthesize speech
@@ -427,7 +399,6 @@ async def text_to_speech(text: str) -> str:
             OutputFormat="mp3",  
             VoiceId="Joanna"    
         )
-
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_audio_file:
             temp_audio_file.write(response['AudioStream'].read())
@@ -441,306 +412,4 @@ async def text_to_speech(text: str) -> str:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error in text-to-speech conversion: {str(e)}")
 
-# New request models for doctor search
-class DoctorSearchRequest(BaseModel):
-    query: str
-    
-class SymptomAnalysisRequest(BaseModel):
-    description: str
 
-@app.post("/search-doctors")
-async def doctor_search_endpoint(request: DoctorSearchRequest):
-    """
-    Search for doctors based on natural language query.
-    
-    Example queries:
-    - "Show me dentists in Riyadh"
-    - "Find cardiologists with 5+ years experience in Jeddah"
-    - "Dermatologists with good ratings in Riyadh" 
-    """
-    try:
-        start_time = time.time()
-        result = unified_doctor_search(request.query)
-        processing_time = time.time() - start_time
-        
-        # Add performance metrics to the data object
-        if "data" not in result:
-            result["data"] = {}
-        
-        # Add performance data to the data object
-        result["data"]["performance"] = {
-            "processing_time": round(processing_time, 2)
-        }
-        
-        # Make sure we return a clear message when more information is needed
-        if result.get('status') == 'needs_more_info':
-            # Make the message stand out in the response
-            print(f"Need more information for doctor search: {result.get('message')}")
-        
-        return result
-    except Exception as e:
-        # Return error in the new format
-        return {
-            "status": "error",
-            "message": f"Error searching for doctors: {str(e)}",
-            "data": {
-                "count": 0,
-                "doctors": []
-            }
-        }
-
-@app.post("/analyze-symptoms")
-async def analyze_symptoms_endpoint(request: SymptomAnalysisRequest):
-    """
-    Analyze symptoms described by the user and recommend appropriate medical specialties.
-    
-    This endpoint uses the signs and symptoms stored in the database to match the user's
-    description to the most relevant medical specialties.
-    
-    Example input:
-    - "I have a toothache and my gums are swollen"
-    - "I'm experiencing chest pain and shortness of breath"
-    - "My skin has a rash and is itchy"
-    """
-    start_time = time.time()
-    request_id = f"req_{int(time.time())}_{hash(request.description) % 10000}"
-    
-    logger.info(f"API [/analyze-symptoms] [{request_id}]: New request received")
-    logger.info(f"API [/analyze-symptoms] [{request_id}]: Symptom description: '{request.description[:100]}...'")
-    
-    try:
-        # Input validation
-        if not request.description or len(request.description.strip()) < 3:
-            logger.warning(f"API [/analyze-symptoms] [{request_id}]: Invalid input - Empty or too short description")
-            return {
-                "status": "error",
-                "message": "Please provide a valid symptom description (at least 3 characters)",
-                "performance": {
-                    "processing_time": round(time.time() - start_time, 2)
-                }
-            }
-        
-        # Match symptoms to specialties
-        analysis_start = time.time()
-        logger.info(f"API [/analyze-symptoms] [{request_id}]: Calling unified_doctor_search")
-        result = unified_doctor_search(request.description)
-        analysis_time = time.time() - analysis_start
-        logger.info(f"API [/analyze-symptoms] [{request_id}]: Analysis completed in {analysis_time:.2f}s")
-        
-        # Log key analysis results
-        if result.get("status") == "success":
-            # If using the new format, extract symptom analysis from the nested structure
-            symptom_analysis = result.get("symptom_analysis", {})
-            detected_symptoms = symptom_analysis.get("detected_symptoms", [])
-            recommendations = symptom_analysis.get("recommended_specialties", [])
-            
-            logger.info(f"API [/analyze-symptoms] [{request_id}]: Analysis successful - "
-                        f"Detected {len(detected_symptoms)} symptoms, recommended {len(recommendations)} specialties")
-            
-            if recommendations:
-                top_specialty = recommendations[0]
-                logger.info(f"API [/analyze-symptoms] [{request_id}]: Top recommendation - "
-                           f"Specialty: {top_specialty.get('name')}, "
-                           f"Subspecialty: {top_specialty.get('subspecialty', 'None')}, "
-                           f"Confidence: {top_specialty.get('confidence', 0):.2f}")
-        else:
-            logger.error(f"API [/analyze-symptoms] [{request_id}]: Analysis failed - "
-                        f"Status: {result.get('status')}, Error: {result.get('error_details', 'Unknown error')}")
-        
-        # Calculate total processing time
-        processing_time = time.time() - start_time
-        
-        # Add performance metrics if not already present
-        if "performance" not in result:
-            result["performance"] = {}
-        
-        result["performance"].update({
-            "endpoint_processing_time": round(processing_time, 2),
-            "analysis_time": round(analysis_time, 2)
-        })
-        
-        # Check if we have any good matches for doctor recommendation
-        doctor_recommendation_start = time.time()
-        top_specialty = get_recommended_specialty(result, confidence_threshold=0.6)
-        doctor_recommendation_time = time.time() - doctor_recommendation_start
-        
-        if top_specialty:
-            logger.info(f"API [/analyze-symptoms] [{request_id}]: Found recommended specialty for doctor search - "
-                       f"{top_specialty['specialty']}" + 
-                       (f" ({top_specialty['subspecialty']})" if top_specialty.get('subspecialty') else ""))
-                       
-            result["recommended_doctor_search"] = {
-                "specialty": top_specialty["specialty"],
-                "subspecialty": top_specialty.get("subspecialty")
-            }
-        else:
-            logger.info(f"API [/analyze-symptoms] [{request_id}]: No specialty met confidence threshold for doctor recommendation")
-        
-        # Add doctor recommendation timing
-        result["performance"]["doctor_recommendation_time"] = round(doctor_recommendation_time, 3)
-        
-        # Log final result size
-        result_size = len(str(result))
-        logger.info(f"API [/analyze-symptoms] [{request_id}]: Returning result with size {result_size} bytes, "
-                   f"total processing time: {processing_time:.2f}s")
-        
-        return result
-        
-    except Exception as e:
-        error_time = time.time() - start_time
-        logger.error(f"API [/analyze-symptoms] [{request_id}]: Unexpected error after {error_time:.2f}s - {str(e)}", exc_info=True)
-        return {
-            "status": "error",
-            "message": f"Error analyzing symptoms: {str(e)}",
-            "error_details": str(e),
-            "performance": {
-                "processing_time": round(error_time, 2)
-            }
-        }
-
-class SymptomDebugRequest(BaseModel):
-    symptoms: List[str]
-    max_results: Optional[int] = 5
-
-@app.post("/debug/symptom-matching")
-async def debug_symptom_matching_endpoint(request: SymptomDebugRequest):
-    """
-    Debug endpoint for testing symptom matching with detailed diagnostics.
-    Now provides a simplified version that uses the main unified_doctor_search function.
-    """
-    try:
-        start_time = time.time()
-        request_id = f"dbg_{int(time.time())}_{hash(','.join(request.symptoms)) % 10000}"
-        
-        logger.info(f"API [/debug/symptom-matching] [{request_id}]: Analyzing {len(request.symptoms)} symptoms")
-        logger.info(f"API [/debug/symptom-matching] [{request_id}]: Symptoms: {request.symptoms}")
-        
-        # Combine symptoms into a single description
-        combined_symptoms = ", ".join(request.symptoms)
-        
-        # Call the unified function to analyze symptoms
-        analysis = unified_doctor_search(combined_symptoms)
-        
-        # Format the response
-        if analysis.get("is_describing_symptoms", False):
-            result = {
-                "status": "success",
-                "summary": {
-                    "total_symptoms": len(request.symptoms),
-                    "is_symptom_description": True,
-                },
-                "recommended_specialties": analysis.get("specialties", [])[:request.max_results],
-                "symptom_analysis": analysis.get("symptom_analysis", {})
-            }
-        else:
-            result = {
-                "status": "no_symptoms",
-                "summary": {
-                    "total_symptoms": len(request.symptoms),
-                    "is_symptom_description": False,
-                },
-                "message": "The input doesn't appear to be describing symptoms"
-            }
-        
-        processing_time = time.time() - start_time
-        result["performance"] = {"endpoint_processing_time": round(processing_time, 3)}
-        
-        logger.info(f"API [/debug/symptom-matching] [{request_id}]: Completed in {processing_time:.3f}s")
-        
-        return result
-        
-    except Exception as e:
-        logger.error(f"API [/debug/symptom-matching]: Error during debug - {str(e)}", exc_info=True)
-        return {
-            "status": "error",
-            "message": f"Error during symptom matching debug: {str(e)}",
-            "error_details": str(e)
-        }
-
-@app.get("/debug/specialty/{specialty_id}")
-async def get_specialty_details(specialty_id: int):
-    """
-    Get detailed information about a specific specialty by ID,
-    including raw signs and symptoms data.
-    
-    This is useful for debugging the symptom matching process
-    and verifying that specialties are loaded correctly.
-    """
-    try:
-        from .db import DB
-        
-        db = DB()
-        query = "SELECT * FROM Speciality WHERE ID = :id"
-        cursor = db.engine.connect()
-        result = cursor.execute(text(query), {"id": specialty_id})
-        rows = [dict(row) for row in result.mappings()]
-        cursor.close()
-        
-        if not rows:
-            return {
-                "status": "error",
-                "message": f"No specialty found with ID {specialty_id}"
-            }
-            
-        # Format the response with both raw and parsed data
-        specialty = rows[0]
-        
-        # Parse the signs and symptoms
-        raw_signs = specialty.get("Signs", "")
-        raw_symptoms = specialty.get("Symptoms", "")
-        
-        signs = []
-        if raw_signs:
-            signs = [s.strip().lower() for s in raw_signs.split(',') if s.strip()]
-            
-        symptoms = []
-        if raw_symptoms:
-            symptoms = [s.strip().lower() for s in raw_symptoms.split(',') if s.strip()]
-        
-        # Prepare response
-        response = {
-            "status": "success",
-            "specialty": {
-                "id": specialty.get("ID"),
-                "name": specialty.get("SpecialityName"),
-                "subspecialty": specialty.get("SubSpeciality"),
-                "raw_data": {
-                    "signs": raw_signs,
-                    "symptoms": raw_symptoms
-                },
-                "parsed_data": {
-                    "signs": signs,
-                    "symptoms": symptoms,
-                    "sign_count": len(signs),
-                    "symptom_count": len(symptoms)
-                },
-                "parsing_validation": {
-                    "signs_comma_count": raw_signs.count(',') if raw_signs else 0,
-                    "symptoms_comma_count": raw_symptoms.count(',') if raw_symptoms else 0,
-                    "expected_sign_count": raw_signs.count(',') + 1 if raw_signs else 0,
-                    "expected_symptom_count": raw_symptoms.count(',') + 1 if raw_symptoms else 0
-                }
-            }
-        }
-        
-        # Add a consistency check
-        if raw_signs:
-            expected_sign_count = raw_signs.count(',') + 1 if raw_signs else 0
-            response["specialty"]["parsing_validation"]["signs_consistent"] = (
-                expected_sign_count == len(signs)
-            )
-            
-        if raw_symptoms:
-            expected_symptom_count = raw_symptoms.count(',') + 1 if raw_symptoms else 0
-            response["specialty"]["parsing_validation"]["symptoms_consistent"] = (
-                expected_symptom_count == len(symptoms)
-            )
-        
-        return response
-        
-    except Exception as e:
-        logger.error(f"Error retrieving specialty details: {str(e)}", exc_info=True)
-        return {
-            "status": "error",
-            "message": f"Error retrieving specialty details: {str(e)}"
-        }

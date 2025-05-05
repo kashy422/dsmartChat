@@ -1,0 +1,16 @@
+--- agent.py
++++ agent.py
+@@ -840,9 +840,9 @@
+                         # Also add to ChatHistory object
+                         history.add_ai_message(content)
+                         
+-                            return {
+-                                "message": content,
+-                            "patient": patient_data or {"session_id": session_id},
+-                                "data": []
+-                            }
++                        return {
++                            "message": content,
++                            "patient": patient_data or {"session_id": session_id},
++                            "data": []
++                        } 
