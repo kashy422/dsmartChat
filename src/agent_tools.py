@@ -17,7 +17,7 @@ from .utils import store_patient_details as store_patient_details_util, thread_l
 from .specialty_matcher import detect_symptoms_and_specialties
 
 # Import the query builder functionality
-from .query_builder_agent import unified_doctor_search_tool, extract_search_criteria_tool
+from .query_builder_agent import unified_doctor_search_tool, extract_search_criteria_tool, normalize_specialty
 
 # Configure logging
 logging.basicConfig(
@@ -166,6 +166,13 @@ def dynamic_doctor_search(user_query: str) -> Dict[str, Any]:
                     specialty_name = specialty_obj.get("specialty") or specialty_obj.get("name", "")
                     subspecialty_name = specialty_obj.get("subspecialty", "")
                     
+                    # Normalize specialty name if present
+                    if specialty_name:
+                        normalized = normalize_specialty(specialty_name)
+                        if normalized != specialty_name:
+                            logger.info(f"Normalized specialty '{specialty_name}' to '{normalized}'")
+                            specialty_name = normalized
+                    
                     # Update the criteria with the extracted values
                     if specialty_name:
                         structured_criteria["speciality"] = specialty_name
@@ -176,6 +183,14 @@ def dynamic_doctor_search(user_query: str) -> Dict[str, Any]:
                     
                     # Remove the original nested object to avoid confusion
                     del structured_criteria["specialty"]
+                
+                # Normalize speciality field if it exists
+                if "speciality" in structured_criteria and isinstance(structured_criteria["speciality"], str):
+                    original = structured_criteria["speciality"]
+                    normalized = normalize_specialty(original)
+                    if normalized != original:
+                        logger.info(f"Normalized speciality '{original}' to '{normalized}'")
+                        structured_criteria["speciality"] = normalized
                 
                 # Log the detected specialty/subspecialty being used
                 specialty = structured_criteria.get("speciality", "")
@@ -209,6 +224,11 @@ def dynamic_doctor_search(user_query: str) -> Dict[str, Any]:
         
         # For natural language queries, first extract criteria to get structured data
         logger.info(f"Processing natural language query: '{user_query}'")
+        
+        # Check for common specialty terms in the query to help guide extraction
+        if any(term in user_query.lower() for term in ["dentist", "doctor", "physician", "specialist"]):
+            logger.info(f"Detected specialty-related terms in query, will try to extract specialty")
+        
         criteria_result = extract_search_criteria_tool(user_query)
         logger.info(f"Extracted search criteria: {criteria_result}")
         
@@ -245,6 +265,13 @@ def dynamic_doctor_search(user_query: str) -> Dict[str, Any]:
                     specialty = top_specialty.get('specialty') or top_specialty.get('name')
                     subspecialty = top_specialty.get('subspecialty') or top_specialty.get('subspecialty')
                     
+                    # Normalize specialty name
+                    if specialty:
+                        normalized = normalize_specialty(specialty)
+                        if normalized != specialty:
+                            logger.info(f"Normalized specialty '{specialty}' from symptom analysis to '{normalized}'")
+                            specialty = normalized
+                    
                     # Add specialty and subspecialty to combined criteria if they exist
                     if specialty or subspecialty:
                         specialty_data = {
@@ -255,6 +282,13 @@ def dynamic_doctor_search(user_query: str) -> Dict[str, Any]:
                         combined_criteria.update({k: v for k, v in specialty_data.items() if v})
             except Exception as e:
                 logger.error(f"Error extracting specialty from symptom analysis: {str(e)}")
+        
+        # If we don't have a specialty yet, check for common terms in the query
+        if "speciality" not in combined_criteria:
+            # Check for dentist in query
+            if "dentist" in user_query.lower():
+                logger.info("Explicitly setting DENTISTRY as specialty based on query text")
+                combined_criteria["speciality"] = "DENTISTRY"
         
         # Add coordinates to combined criteria if available
         if lat is not None and long is not None:
