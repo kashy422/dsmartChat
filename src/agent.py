@@ -931,6 +931,11 @@ def chat_engine():
                         # First, try to extract and store patient details
                         logger.info("👤 Attempting to extract patient details from direct search message")
                         try:
+                            # Initialize messages list if not exists
+                            if session_id not in self.messages_by_session:
+                                self.messages_by_session[session_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
+                            messages = self.messages_by_session[session_id]
+                            
                             # Create a tool call for patient details
                             patient_tool_call = {
                                 "id": str(uuid.uuid4()),
@@ -949,6 +954,14 @@ def chat_engine():
                             
                             logger.info(f"🔧 Created store_patient_details tool call with ID: {patient_tool_call['id']}")
                             logger.info(f"📝 Tool arguments: {patient_tool_call['function']['arguments']}")
+                            
+                            # Add the tool call message
+                            messages.append({
+                                "role": "assistant",
+                                "content": None,
+                                "tool_calls": [patient_tool_call]
+                            })
+                            logger.info("✅ Added tool call to messages")
                             
                             # Execute the tool
                             logger.info("🔄 Executing store_patient_details tool...")
@@ -1001,6 +1014,15 @@ def chat_engine():
                                 # Call store_patient_details with extracted data
                                 result = store_patient_details(session_id=session_id, **extracted_data)
                                 logger.info(f"📋 Patient details result: {json.dumps(result, indent=2)}")
+                                
+                                # Add tool result message immediately after the tool call
+                                messages.append({
+                                    "role": "tool",
+                                    "content": json.dumps(result),
+                                    "tool_call_id": patient_tool_call["id"],
+                                    "name": "store_patient_details"
+                                })
+                                logger.info("✅ Added tool result message to messages")
                                 
                                 # Update history with patient data
                                 if result and isinstance(result, dict):
@@ -1161,7 +1183,7 @@ def chat_engine():
                                     logger.info(f"HOTFIX: Extracted specialty '{first_specialty['specialty']}'")
                                 
                                 if "subspecialty" in first_specialty:
-                                    specialty_criteria["subspeciality"] = first_specialty["subspecialty"]
+                                    specialty_criteria["subspecialty"] = first_specialty["subspecialty"]
                                     logger.info(f"HOTFIX: Extracted subspecialty '{first_specialty['subspecialty']}'")
                         
                         # NEW HOTFIX - Handle the structure with top-level symptom_analysis key
@@ -1437,6 +1459,15 @@ def chat_engine():
                             # Call store_patient_details with extracted data
                             result = store_patient_details(session_id=session_id, **extracted_data)
                             logger.info(f"📋 Patient details result: {json.dumps(result, indent=2)}")
+                            
+                            # Add tool result message immediately after the tool call
+                            messages.append({
+                                "role": "tool",
+                                "content": json.dumps(result),
+                                "tool_call_id": patient_tool_call["id"],
+                                "name": "store_patient_details"
+                            })
+                            logger.info("✅ Added tool result message to messages")
                             
                             # Update history with patient data
                             if result and isinstance(result, dict):
