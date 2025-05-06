@@ -78,11 +78,12 @@ class SpecialtyDataCache:
                 s.Signs as signs,
                 s.Symptoms as symptoms
             FROM 
-                Speciality s
+                dbo.Speciality s
             """
             
             # Execute query
             cursor = db.engine.connect()
+            logger.info(f"DB Engine connected: {db.engine.url}")
             result = cursor.execute(text(query))
             rows = [dict(row) for row in result.mappings()]
             cursor.close()
