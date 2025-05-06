@@ -928,6 +928,108 @@ def chat_engine():
                         # First add the user message to history
                         history.add_user_message(user_message)
                         
+                        # First, try to extract and store patient details
+                        logger.info("👤 Attempting to extract patient details from direct search message")
+                        try:
+                            # Create a tool call for patient details
+                            patient_tool_call = {
+                                "id": str(uuid.uuid4()),
+                                "type": "function",
+                                "function": {
+                                    "name": "store_patient_details",
+                                    "arguments": json.dumps({
+                                        "Name": None,
+                                        "Age": None,
+                                        "Gender": None,
+                                        "Location": None,
+                                        "Issue": None
+                                    })
+                                }
+                            }
+                            
+                            logger.info(f"🔧 Created store_patient_details tool call with ID: {patient_tool_call['id']}")
+                            logger.info(f"📝 Tool arguments: {patient_tool_call['function']['arguments']}")
+                            
+                            # Execute the tool
+                            logger.info("🔄 Executing store_patient_details tool...")
+                            # Extract patient info from message
+                            try:
+                                # Use OpenAI to extract patient info
+                                extraction_prompt = f"""
+                                Extract patient information from this message. Look for:
+                                - Name
+                                - Age
+                                - Gender
+                                - Location
+                                - Health issues/symptoms (store in Issue field)
+                                
+                                Message: {user_message}
+                                
+                                For health issues/symptoms:
+                                1. Extract any mentioned symptoms, pain, or health concerns
+                                2. Include severity if mentioned (e.g., "severe headache", "mild fever")
+                                3. Include duration if mentioned (e.g., "headache for 2 days")
+                                4. Combine multiple symptoms with "and" (e.g., "fever and cough")
+                                
+                                Return ONLY a JSON object with the fields you find. If a field is not found, omit it.
+                                Example: {{"Name": "John", "Age": 30, "Gender": "Male", "Issue": "severe headache and fever for 2 days"}}
+                                """
+                                
+                                extraction = client.chat.completions.create(
+                                    model="gpt-4o-mini-2024-07-18",
+                                    messages=[
+                                        {"role": "system", "content": "You are a patient information extractor. Extract ONLY the information present in the message. For health issues, be thorough in capturing all symptoms and their details."},
+                                        {"role": "user", "content": extraction_prompt}
+                                    ]
+                                )
+                                
+                                extracted_data = json.loads(extraction.choices[0].message.content)
+                                logger.info(f"📋 Extracted patient data: {json.dumps(extracted_data, indent=2)}")
+                                
+                                # Ensure Issue field is properly formatted
+                                if "Issue" in extracted_data:
+                                    # Clean up the Issue field
+                                    issue = extracted_data["Issue"]
+                                    if isinstance(issue, str):
+                                        # Remove any extra whitespace
+                                        issue = " ".join(issue.split())
+                                        # Ensure it starts with a capital letter
+                                        issue = issue[0].upper() + issue[1:] if issue else None
+                                        extracted_data["Issue"] = issue
+                                        logger.info(f"✅ Formatted Issue field: {issue}")
+                                
+                                # Call store_patient_details with extracted data
+                                result = store_patient_details(session_id=session_id, **extracted_data)
+                                logger.info(f"📋 Patient details result: {json.dumps(result, indent=2)}")
+                                
+                                # Update history with patient data
+                                if result and isinstance(result, dict):
+                                    # Log the current state of patient data
+                                    current_data = history.get_patient_data()
+                                    logger.info(f"📊 Current patient data before update: {json.dumps(current_data, indent=2)}")
+                                    
+                                    # Update the data
+                                    history.set_patient_data(result)
+                                    
+                                    # Log the updated state
+                                    updated_data = history.get_patient_data()
+                                    logger.info(f"📊 Updated patient data after store: {json.dumps(updated_data, indent=2)}")
+                                    
+                                    # Log specific fields that were updated
+                                    for key, value in result.items():
+                                        if value is not None:
+                                            logger.info(f"✅ Updated {key}: {value}")
+                                else:
+                                    logger.warning("⚠️ No patient data to store - result was empty or invalid")
+                                    
+                            except Exception as e:
+                                logger.error(f"❌ Error in store_patient_details: {str(e)}", exc_info=True)
+                                # Continue with doctor search even if patient extraction fails
+                        
+                        except Exception as e:
+                            logger.error(f"❌ Error in store_patient_details: {str(e)}", exc_info=True)
+                            # Continue with doctor search even if patient extraction fails
+                        
                         # First, extract structured search criteria from the natural language message
                         logger.info(f"Extracting search criteria from message: '{user_message}'")
                         search_criteria = extract_search_criteria_from_message(user_message)
@@ -1254,6 +1356,116 @@ def chat_engine():
                 self.add_message_to_history(session_id, {"role": "user", "content": user_message})
                 
                 try:
+                    # First, try to extract and store patient details using the tool
+                    logger.info("👤 Attempting to extract patient details using store_patient_details tool")
+                    try:
+                        # Create a tool call for patient details
+                        patient_tool_call = {
+                            "id": str(uuid.uuid4()),
+                            "type": "function",
+                            "function": {
+                                "name": "store_patient_details",
+                                "arguments": json.dumps({
+                                    "Name": None,
+                                    "Age": None,
+                                    "Gender": None,
+                                    "Location": None,
+                                    "Issue": None
+                                })
+                            }
+                        }
+                        
+                        logger.info(f"🔧 Created store_patient_details tool call with ID: {patient_tool_call['id']}")
+                        logger.info(f"📝 Tool arguments: {patient_tool_call['function']['arguments']}")
+                        
+                        # Add the tool call message
+                        messages.append({
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [patient_tool_call]
+                        })
+                        logger.info("✅ Added tool call to messages")
+                        
+                        # Execute the tool
+                        logger.info("🔄 Executing store_patient_details tool...")
+                        # Extract patient info from message
+                        try:
+                            # Use OpenAI to extract patient info
+                            extraction_prompt = f"""
+                            Extract patient information from this message. Look for:
+                            - Name
+                            - Age
+                            - Gender
+                            - Location
+                            - Health issues/symptoms (store in Issue field)
+                            
+                            Message: {user_message}
+                            
+                            For health issues/symptoms:
+                            1. Extract any mentioned symptoms, pain, or health concerns
+                            2. Include severity if mentioned (e.g., "severe headache", "mild fever")
+                            3. Include duration if mentioned (e.g., "headache for 2 days")
+                            4. Combine multiple symptoms with "and" (e.g., "fever and cough")
+                            
+                            Return ONLY a JSON object with the fields you find. If a field is not found, omit it.
+                            Example: {{"Name": "John", "Age": 30, "Gender": "Male", "Issue": "severe headache and fever for 2 days"}}
+                            """
+                            
+                            extraction = client.chat.completions.create(
+                                model="gpt-4o-mini-2024-07-18",
+                                messages=[
+                                    {"role": "system", "content": "You are a patient information extractor. Extract ONLY the information present in the message. For health issues, be thorough in capturing all symptoms and their details."},
+                                    {"role": "user", "content": extraction_prompt}
+                                ]
+                            )
+                            
+                            extracted_data = json.loads(extraction.choices[0].message.content)
+                            logger.info(f"📋 Extracted patient data: {json.dumps(extracted_data, indent=2)}")
+                            
+                            # Ensure Issue field is properly formatted
+                            if "Issue" in extracted_data:
+                                # Clean up the Issue field
+                                issue = extracted_data["Issue"]
+                                if isinstance(issue, str):
+                                    # Remove any extra whitespace
+                                    issue = " ".join(issue.split())
+                                    # Ensure it starts with a capital letter
+                                    issue = issue[0].upper() + issue[1:] if issue else None
+                                    extracted_data["Issue"] = issue
+                                    logger.info(f"✅ Formatted Issue field: {issue}")
+                            
+                            # Call store_patient_details with extracted data
+                            result = store_patient_details(session_id=session_id, **extracted_data)
+                            logger.info(f"📋 Patient details result: {json.dumps(result, indent=2)}")
+                            
+                            # Update history with patient data
+                            if result and isinstance(result, dict):
+                                # Log the current state of patient data
+                                current_data = history.get_patient_data()
+                                logger.info(f"📊 Current patient data before update: {json.dumps(current_data, indent=2)}")
+                                
+                                # Update the data
+                                history.set_patient_data(result)
+                                
+                                # Log the updated state
+                                updated_data = history.get_patient_data()
+                                logger.info(f"📊 Updated patient data after store: {json.dumps(updated_data, indent=2)}")
+                                
+                                # Log specific fields that were updated
+                                for key, value in result.items():
+                                    if value is not None:
+                                        logger.info(f"✅ Updated {key}: {value}")
+                            else:
+                                logger.warning("⚠️ No patient data to store - result was empty or invalid")
+                                
+                        except Exception as e:
+                            logger.error(f"❌ Error in store_patient_details: {str(e)}", exc_info=True)
+                            # Continue with doctor search even if patient extraction fails
+                        
+                    except Exception as e:
+                        logger.error(f"❌ Error in store_patient_details: {str(e)}", exc_info=True)
+                        # Continue with normal processing even if patient extraction fails
+                    
                     # Call OpenAI API with message history and tools
                     logger.info(f"🔄 Calling OpenAI API for session {session_id}")
                     
