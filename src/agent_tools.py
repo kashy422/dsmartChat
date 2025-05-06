@@ -11,13 +11,17 @@ import time
 from functools import wraps
 
 # Import the patient utilities from the new package structure
-from .utils import store_patient_details as store_patient_details_util, thread_local
+from .utils import store_patient_details as store_patient_details_util, thread_local, clear_symptom_analysis_data
 
 # Import the specialty matcher functionality
 from .specialty_matcher import detect_symptoms_and_specialties
 
 # Import the query builder functionality
-from .query_builder_agent import unified_doctor_search_tool, extract_search_criteria_tool, normalize_specialty
+from .query_builder_agent import (
+    unified_doctor_search_tool, 
+    extract_search_criteria_tool, 
+    normalize_specialty
+)
 
 # Configure logging
 logging.basicConfig(
@@ -121,6 +125,17 @@ def dynamic_doctor_search(user_query: str) -> Dict[str, Any]:
         from .utils import thread_local
         import json
         
+        # Store reference to session_id for later use
+        current_session_id = getattr(thread_local, 'session_id', None)
+        logger.info(f"DOCTOR SEARCH: Using session ID: {current_session_id}")
+        
+        # Check if this is a new direct search (not coming from symptom analysis)
+        if not (isinstance(user_query, dict) and user_query.get('from_symptom_analysis')):
+            # We're starting a new search directly - clear lingering symptom analysis data
+            # This prevents old symptom data from affecting new direct searches
+            logger.info("DOCTOR SEARCH: Clearing previous symptom analysis data")
+            clear_symptom_analysis_data("starting new direct search")
+        
         # Handle case where a dictionary was passed directly instead of a string
         if isinstance(user_query, dict):
             logger.info(f"Dictionary passed directly to dynamic_doctor_search, converting to JSON string")
@@ -145,6 +160,12 @@ def dynamic_doctor_search(user_query: str) -> Dict[str, Any]:
                 structured_criteria = json.loads(user_query)
                 logger.info(f"Detected structured criteria in JSON format: {structured_criteria}")
                 
+                # Debug log to check for subspeciality at the beginning
+                if "subspeciality" in structured_criteria:
+                    logger.info(f"DEBUG SUBSPECIALTY: Found subspeciality '{structured_criteria['subspeciality']}' in input")
+                else:
+                    logger.info("DEBUG SUBSPECIALTY: No subspeciality found in input")
+                
                 # Check for latitude and longitude in the structured criteria
                 if "latitude" in structured_criteria and "longitude" in structured_criteria:
                     lat = structured_criteria["latitude"]
@@ -168,10 +189,15 @@ def dynamic_doctor_search(user_query: str) -> Dict[str, Any]:
                     
                     # Normalize specialty name if present
                     if specialty_name:
-                        normalized = normalize_specialty(specialty_name)
-                        if normalized != specialty_name:
-                            logger.info(f"Normalized specialty '{specialty_name}' to '{normalized}'")
-                            specialty_name = normalized
+                        normalized_result = normalize_specialty(specialty_name)
+                        if normalized_result["specialty"] != specialty_name:
+                            logger.info(f"Normalized specialty '{specialty_name}' to '{normalized_result['specialty']}'")
+                            specialty_name = normalized_result["specialty"]
+                            
+                            # Add subspecialty if it was determined during normalization
+                            if "subspecialty" in normalized_result and not subspecialty_name:
+                                subspecialty_name = normalized_result["subspecialty"] 
+                                logger.info(f"Added subspecialty '{subspecialty_name}' from normalization")
                     
                     # Update the criteria with the extracted values
                     if specialty_name:
@@ -187,10 +213,21 @@ def dynamic_doctor_search(user_query: str) -> Dict[str, Any]:
                 # Normalize speciality field if it exists
                 if "speciality" in structured_criteria and isinstance(structured_criteria["speciality"], str):
                     original = structured_criteria["speciality"]
-                    normalized = normalize_specialty(original)
-                    if normalized != original:
-                        logger.info(f"Normalized speciality '{original}' to '{normalized}'")
-                        structured_criteria["speciality"] = normalized
+                    normalized_result = normalize_specialty(original)
+                    if normalized_result["specialty"] != original:
+                        logger.info(f"Normalized speciality '{original}' to '{normalized_result['specialty']}'")
+                        structured_criteria["speciality"] = normalized_result["specialty"]
+                        
+                        # Add subspecialty if it was determined during normalization
+                        if "subspecialty" in normalized_result and "subspeciality" not in structured_criteria:
+                            structured_criteria["subspeciality"] = normalized_result["subspecialty"]
+                            logger.info(f"Added subspeciality '{normalized_result['subspecialty']}' from normalization")
+                
+                # Debug check for subspeciality parameter
+                if "subspeciality" in structured_criteria:
+                    logger.info(f"DEBUG SUBSPECIALTY: Found subspeciality '{structured_criteria['subspeciality']}' - ensuring it's passed to search")
+                else:
+                    logger.info(f"DEBUG SUBSPECIALTY: No subspeciality found in input")
                 
                 # Log the detected specialty/subspecialty being used
                 specialty = structured_criteria.get("speciality", "")
@@ -267,10 +304,15 @@ def dynamic_doctor_search(user_query: str) -> Dict[str, Any]:
                     
                     # Normalize specialty name
                     if specialty:
-                        normalized = normalize_specialty(specialty)
-                        if normalized != specialty:
-                            logger.info(f"Normalized specialty '{specialty}' from symptom analysis to '{normalized}'")
-                            specialty = normalized
+                        normalized_result = normalize_specialty(specialty)
+                        if normalized_result["specialty"] != specialty:
+                            logger.info(f"Normalized specialty '{specialty}' from symptom analysis to '{normalized_result['specialty']}'")
+                            specialty = normalized_result["specialty"]
+                            
+                            # Add subspecialty if it was determined during normalization
+                            if "subspecialty" in normalized_result and not subspecialty:
+                                subspecialty = normalized_result["subspecialty"]
+                                logger.info(f"Added subspecialty '{subspecialty}' from normalization")
                     
                     # Add specialty and subspecialty to combined criteria if they exist
                     if specialty or subspecialty:
@@ -447,6 +489,17 @@ def analyze_symptoms(symptom_description: str) -> Dict[str, Any]:
         from .utils import thread_local
         
         logger.info(f"DETAILED DEBUG: Starting symptom analysis for: '{symptom_description[:50]}...'")
+        
+        # CRITICAL FIX: Clear any existing symptom analysis data before starting new analysis
+        if hasattr(thread_local, 'symptom_analysis'):
+            logger.info(f"CRITICAL FIX: Clearing previous symptom_analysis before starting new analysis")
+            delattr(thread_local, 'symptom_analysis')
+        
+        # Clear any specialty-related fields that might be in thread_local
+        for attr in ['specialty', 'subspecialty', 'speciality', 'subspeciality', 'last_specialty', 'detected_specialties']:
+            if hasattr(thread_local, attr):
+                logger.info(f"CRITICAL FIX: Clearing {attr} from thread_local before symptom analysis")
+                delattr(thread_local, attr)
         
         # Call the specialty detection function
         result = detect_symptoms_and_specialties(symptom_description)

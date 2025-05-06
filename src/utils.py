@@ -10,7 +10,13 @@ import os
 import time
 import csv
 from pathlib import Path
+import pandas as pd
+from decimal import Decimal
+import re
 
+
+# Initialize logger
+logger = logging.getLogger(__name__)
 
 # Thread local storage for session ID sharing across components
 thread_local = threading.local()
@@ -412,3 +418,34 @@ def log_thread_local_state(logger, session_id=None):
                 logger.info(f"  {attr}: {value}")
     except Exception as e:
         logger.error(f"Error logging thread_local state: {str(e)}") 
+
+def clear_symptom_analysis_data(reason="manual reset"):
+    """
+    Clear all symptom analysis and specialty data from thread_local
+    to prevent data leakage between sessions
+    
+    Args:
+        reason: Optional reason for logging
+    """
+    logger.info(f"UTILS: Clearing all symptom/specialty data: {reason}")
+    
+    # Clear symptom analysis
+    if hasattr(thread_local, 'symptom_analysis'):
+        logger.info("UTILS: Clearing symptom_analysis from thread_local")
+        delattr(thread_local, 'symptom_analysis')
+    
+    # Clear all possible specialty-related attributes
+    attrs_to_clear = [
+        'specialty', 'subspecialty', 'speciality', 'subspeciality',
+        'last_specialty', 'detected_specialties', 'specialty_data',
+        'last_symptom_analysis', 'specialties', 'extracted_specialties'
+    ]
+    
+    for attr in attrs_to_clear:
+        if hasattr(thread_local, attr):
+            logger.info(f"UTILS: Clearing {attr} from thread_local")
+            delattr(thread_local, attr)
+    
+    # Set a flag to indicate the data has been cleared
+    thread_local.symptom_data_cleared = True
+    thread_local.symptom_data_cleared_time = time.time() 

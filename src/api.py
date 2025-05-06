@@ -147,7 +147,10 @@ async def chat(
                         file=audio_file,
                         response_format="text"
                     )
-            
+                    print("-------------------------")
+                    print("LAT: ", lat)
+                    print("LONG: ", long)
+                    print("-------------------------")
                     # Process transcribed message
                     response = process_message(transcription, session_id, lat, long)
                     

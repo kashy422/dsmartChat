@@ -90,22 +90,26 @@ def build_query(criteria: SearchCriteria) -> Tuple[str, Dict[str, Any]]:
         # Specialty search
         if criteria.speciality:
             specialty_value = criteria.speciality.replace("'", "''")
+            # Restore the N prefix for Unicode strings
             where_conditions.append(f"AND le.Specialty = N'{specialty_value}'")
+            logger.info(f"Added specialty filter: le.Specialty = N'{specialty_value}'")
             
             # Include subspecialty if provided
             if criteria.subspeciality:
                 subspecialties = [s.strip() for s in criteria.subspeciality.split(',')] if ',' in criteria.subspeciality else [criteria.subspeciality]
-                if len(subspecialties) == 1:
-                    sub_value = subspecialties[0].replace("'", "''")
-                    where_conditions.append(f"AND s.SubSpeciality = N'{sub_value}'")
-                else:
-                    # Fix the string replacement for single quotes in the IN clause
-                    subspecialties_list = []
-                    for sub in subspecialties:
-                        escaped_sub = sub.replace("'", "''")
-                        subspecialties_list.append(f"N'{escaped_sub}'")
-                    subspecialties_str = ", ".join(subspecialties_list)
-                    where_conditions.append(f"AND s.SubSpeciality IN ({subspecialties_str})")
+                
+                # Create properly formatted IN clause for subspecialties using ds.Subspecialities
+                # Add N prefix for Unicode strings
+                subspecialties_list = []
+                for sub in subspecialties:
+                    # Properly escape single quotes for SQL
+                    escaped_sub = sub.replace("'", "''")
+                    subspecialties_list.append(f"N'{escaped_sub}'")
+                
+                # Join with commas for the IN clause
+                subspecialties_str = ", ".join(subspecialties_list)
+                where_conditions.append(f"AND ds.Subspecialities IN ({subspecialties_str})")
+                logger.info(f"Added subspecialty filter using IN clause: ds.Subspecialities IN ({subspecialties_str})")
         
         # Rating filter
         if criteria.min_rating is not None:
@@ -150,7 +154,7 @@ def build_query(criteria: SearchCriteria) -> Tuple[str, Dict[str, Any]]:
         logger.error(f"Error building query: {str(e)}")
         raise
 
-def normalize_specialty(specialty_name: str) -> str:
+def normalize_specialty(specialty_name: str) -> dict:
     """
     Normalize specialty names to match the database terminology.
     This is needed because user queries and LLM outputs may use different terms
@@ -160,56 +164,64 @@ def normalize_specialty(specialty_name: str) -> str:
         specialty_name: The original specialty name
         
     Returns:
-        The normalized specialty name that matches the database
+        Dictionary with normalized specialty and subspecialty if applicable
     """
     if not specialty_name:
-        return specialty_name
+        return {"specialty": specialty_name}
         
     # Convert to lowercase for comparison
     specialty_lower = specialty_name.lower()
     
-    # Common specialty name mappings
+    # Special case: GP is a subspecialty of DENTISTRY
+    gp_terms = ["gp", "general practice", "general practitioner", "family medicine", 
+                "general physician", "primary care"]
+    
+    for term in gp_terms:
+        if term in specialty_lower:
+            logger.info(f"SPECIALTY: Detected GP term in '{specialty_name}', setting as subspecialty of Dentistry")
+            return {
+                "specialty": "Dentistry",
+                "subspecialty": "GP"
+            }
+    
+    # Common specialty name mappings - use proper case as expected by the stored procedure
     mappings = {
-        "dentist": "DENTISTRY",
-        "dental": "DENTISTRY",
-        "dentistry": "DENTISTRY",
-        "general practice": "GENERAL PRACTITIONER",
-        "general practitioner": "GENERAL PRACTITIONER",
-        "family medicine": "GENERAL PRACTITIONER",
-        "general physician": "GENERAL PRACTITIONER",
-        "primary care": "GENERAL PRACTITIONER",
-        "cardiology": "CARDIOLOGY",
-        "cardiologist": "CARDIOLOGY",
-        "heart": "CARDIOLOGY",
-        "dermatology": "DERMATOLOGY",
-        "dermatologist": "DERMATOLOGY",
-        "skin": "DERMATOLOGY",
-        "pediatric": "PEDIATRICS",
-        "pediatrics": "PEDIATRICS",
-        "pediatrician": "PEDIATRICS",
-        "children": "PEDIATRICS",
-        "orthopedic": "ORTHOPEDICS",
-        "orthopedics": "ORTHOPEDICS",
-        "bones": "ORTHOPEDICS",
-        "gynecology": "OBSTETRICS & GYNECOLOGY",
-        "obgyn": "OBSTETRICS & GYNECOLOGY",
-        "obstetrics": "OBSTETRICS & GYNECOLOGY"
+        "dentist": "Dentistry",
+        "dental": "Dentistry",
+        "dentistry": "Dentistry",
+        "cardiology": "Cardiology",
+        "cardiologist": "Cardiology",
+        "heart": "Cardiology",
+        "dermatology": "Dermatology",
+        "dermatologist": "Dermatology",
+        "skin": "Dermatology",
+        "pediatric": "Pediatrics",
+        "pediatrics": "Pediatrics",
+        "pediatrician": "Pediatrics",
+        "children": "Pediatrics",
+        "orthopedic": "Orthopedics",
+        "orthopedics": "Orthopedics",
+        "bones": "Orthopedics",
+        "gynecology": "Obstetrics & Gynecology",
+        "obgyn": "Obstetrics & Gynecology",
+        "obstetrics": "Obstetrics & Gynecology"
     }
     
     # Check for exact matches first
     if specialty_lower in mappings:
-        logger.info(f"SPECIALTY: Normalized '{specialty_name}' to '{mappings[specialty_lower]}'")
-        return mappings[specialty_lower]
+        normalized = mappings[specialty_lower]
+        logger.info(f"SPECIALTY: Normalized '{specialty_name}' to '{normalized}'")
+        return {"specialty": normalized}
     
     # Check for partial matches
     for key, value in mappings.items():
         if key in specialty_lower:
             logger.info(f"SPECIALTY: Partial match normalized '{specialty_name}' to '{value}'")
-            return value
+            return {"specialty": value}
     
     # If no mapping found, return the original with first letter of each word capitalized
     logger.info(f"SPECIALTY: No mapping found for '{specialty_name}', keeping as is")
-    return specialty_name
+    return {"specialty": specialty_name}
 
 def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
     """
@@ -246,14 +258,19 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
                         idx = words.index(specialty_keyword)
                         if idx > 0:  # There's a word before this that might be a specialty
                             potential_specialty = words[idx-1] + " " + specialty_keyword
-                            normalized = normalize_specialty(potential_specialty)
-                            if normalized != potential_specialty:
-                                final_criteria["speciality"] = normalized
+                            normalized_result = normalize_specialty(potential_specialty)
+                            if normalized_result["specialty"] != potential_specialty:
+                                final_criteria["speciality"] = normalized_result["specialty"]
+                                if "subspecialty" in normalized_result:
+                                    final_criteria["subspeciality"] = normalized_result["subspecialty"]
                                 break
                 
                 # If no specific specialty found but dentist is mentioned
                 if "speciality" not in final_criteria and "dentist" in input_data.lower():
-                    final_criteria["speciality"] = "DENTISTRY"
+                    normalized_result = normalize_specialty("dentist")
+                    final_criteria["speciality"] = normalized_result["specialty"]
+                    if "subspecialty" in normalized_result:
+                        final_criteria["subspeciality"] = normalized_result["subspecialty"]
             
             # Extract criteria from the message
             extracted = extract_search_criteria_from_message(input_data)
@@ -302,10 +319,13 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
             # Normalize specialty if present
             if isinstance(input_data.get('speciality', ''), str):
                 original = input_data.get('speciality', '')
-                normalized = normalize_specialty(original)
-                if normalized != original:
-                    logger.info(f"DOCTOR SEARCH: Normalized specialty from '{original}' to '{normalized}'")
-                    final_criteria['speciality'] = normalized
+                normalized_result = normalize_specialty(original)
+                if normalized_result["specialty"] != original:
+                    logger.info(f"DOCTOR SEARCH: Normalized specialty from '{original}' to '{normalized_result['specialty']}'")
+                    final_criteria['speciality'] = normalized_result["specialty"]
+                    if "subspecialty" in normalized_result:
+                        logger.info(f"DOCTOR SEARCH: Adding subspecialty '{normalized_result['subspecialty']}' from normalization")
+                        final_criteria['subspeciality'] = normalized_result["subspecialty"]
             
             # Handle specialty field that might be in different formats
             if 'specialty' in input_data and 'speciality' not in input_data:
@@ -315,11 +335,14 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
                     specialty_name = specialty_obj.get('specialty') or specialty_obj.get('name')
                     
                     if specialty_name:
-                        normalized = normalize_specialty(specialty_name)
-                        final_criteria['speciality'] = normalized
+                        normalized_result = normalize_specialty(specialty_name)
+                        final_criteria['speciality'] = normalized_result["specialty"]
                         
-                    if 'subspecialty' in specialty_obj:
-                        final_criteria['subspeciality'] = specialty_obj['subspecialty']
+                        # Get subspecialty from normalization or from original object
+                        if "subspecialty" in normalized_result:
+                            final_criteria['subspeciality'] = normalized_result["subspecialty"]
+                        elif 'subspecialty' in specialty_obj:
+                            final_criteria['subspeciality'] = specialty_obj['subspecialty']
                     
                     # Remove the original field to avoid confusion
                     if 'specialty' in final_criteria:
@@ -328,8 +351,10 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
                     # Simple string value - copy to standard field name
                     specialty_name = input_data['specialty']
                     if specialty_name:
-                        normalized = normalize_specialty(specialty_name)
-                        final_criteria['speciality'] = normalized
+                        normalized_result = normalize_specialty(specialty_name)
+                        final_criteria['speciality'] = normalized_result["specialty"]
+                        if "subspecialty" in normalized_result:
+                            final_criteria['subspeciality'] = normalized_result["subspecialty"]
                     
                     if 'specialty' in final_criteria:
                         del final_criteria['specialty']
@@ -474,6 +499,13 @@ def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
         - Clinic/branch name if mentioned
         - Gender preference ('male' or 'female' doctor) nothing outside these two options.
         
+        IMPORTANT: For gender, look for any indication that the user wants only male or female doctors. 
+        This includes phrases like:
+        - "only females" or "only males"
+        - "female doctors" or "male doctors"
+        - "women doctors" or "men doctors"
+        - "show me females" or "show me males"
+        
         Return ONLY a JSON object with these fields (include only if mentioned):
         {
             "min_price": number,
@@ -549,12 +581,26 @@ def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
 
 def _fallback_extraction(message: str) -> Dict[str, Any]:
     """Fallback extraction for when GPT fails"""
-    # Extract gender if mentioned
+    message_lower = message.lower()
+    
+    # Extract gender if mentioned - enhanced to catch more variations
     gender = None
-    if "male doctor" in message.lower() or "man doctor" in message.lower():
-        gender = "Male"
-    elif "female doctor" in message.lower() or "woman doctor" in message.lower() or "lady doctor" in message.lower():
-        gender = "Female"
+    male_patterns = ["male doctor", "male doctors", "man doctor", "men doctor", "only males", "only male", "male only", 
+                    "men only", "show me male", "show males", "show male", "find male", "find males"]
+    female_patterns = ["female doctor", "female doctors", "woman doctor", "women doctor", "lady doctor", 
+                      "only females", "only female", "female only", "females only", "women only", "woman only",
+                      "show me female", "show females", "show female", "find female", "find females"]
+    
+    for pattern in male_patterns:
+        if pattern in message_lower:
+            gender = "Male"
+            break
+            
+    if not gender:  # Only check female patterns if male wasn't found
+        for pattern in female_patterns:
+            if pattern in message_lower:
+                gender = "Female"
+                break
             
     # Build criteria dictionary
     criteria = {}
