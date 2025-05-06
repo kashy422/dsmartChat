@@ -98,7 +98,8 @@ def build_query(criteria: SearchCriteria) -> Tuple[str, Dict[str, Any]]:
                     where_conditions.append(f"AND s.SubSpeciality = N'{sub_value}'")
                 else:
                     # Fix the string replacement for single quotes in the IN clause
-                    subspecialties_list = ", ".join([f"N'{sub.replace('\'', '\'\'')}'" for sub in subspecialties])
+                    # subspecialties_list = ", ".join([f"N'{sub.replace('\'', '\'\'')}'" for sub in subspecialties])
+                    subspecialties_list = ", ".join([f"N'{sub.replace("'", "''")}'" for sub in subspecialties])
                     where_conditions.append(f"AND s.SubSpeciality IN ({subspecialties_list})")
         
         # Location search
@@ -390,13 +391,13 @@ def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
     try:
         # Prepare prompt for criteria extraction
         system_prompt = """Extract search criteria from the user's message into a structured format. Focus on:
-        - Location (city names like Riyadh, Jeddah, Mecca, Medina, Dammam)
-        - Price range (min and max in SAR)
-        - Rating requirements (minimum rating out of 5)
-        - Experience requirements (minimum years)
+        - Location (city names like Riyadh, Jeddah, Mecca, Medina, Dammam) for Non Enlish messages convert it to English.
+        - Price range (min and max in SAR) in western numbers.
+        - Rating requirements (minimum rating out of 5) in western numbers.
+        - Experience requirements (minimum years) in western numbers.
         - Doctor name if mentioned (with title Dr/Doctor removed)
         - Clinic/branch name if mentioned
-        - Gender preference (male or female doctor)
+        - Gender preference ('male' or 'female' doctor) nothing outside these two options.
         
         Return ONLY a JSON object with these fields (include only if mentioned):
         {
@@ -407,7 +408,7 @@ def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
             "min_experience": number,
             "doctor_name": "name",
             "branch_name": "name",
-            "gender": "Male" or "Female"
+            "gender": "male" or "female"
         }
         """
         
