@@ -98,7 +98,8 @@ def build_query(criteria: SearchCriteria) -> Tuple[str, Dict[str, Any]]:
                     where_conditions.append(f"AND s.SubSpeciality = N'{sub_value}'")
                 else:
                     # Fix the string replacement for single quotes in the IN clause
-                    subspecialties_list = ", ".join([f"N'{sub.replace('\'', '\'\'')}'" for sub in subspecialties])
+                    # subspecialties_list = ", ".join([f"N'{sub.replace('\'', '\'\'')}'" for sub in subspecialties])
+                    subspecialties_list = ", ".join([f"N'{sub.replace("'", "''")}'" for sub in subspecialties])
                     where_conditions.append(f"AND s.SubSpeciality IN ({subspecialties_list})")
         
         # Location search
@@ -389,39 +390,26 @@ def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
     """
     try:
         # Prepare prompt for criteria extraction
-        system_prompt = """You are an intelligent assistant. Your task is to extract structured search criteria from the user's message. The user message will be in natural lanaguage. Also keep in mind that users can also use arabic language.
-
-        For the prices, also encorporate natural language to specify the range of prices. For example: User can ask show me cheapest doctors, or show me doctors with prices between 100 and 500 SAR. You need to extract this information and convert it to the correct format.
-
-        For rating, also encorporate natural language to specify the range of ratings. For example: User can ask show me doctors with ratings above 4.5, or show me high or low ratings, or show me doctors with ratings between 3.5 and 4.5. You need to extract this information and convert it to the correct format.
-
-        For experience, also encorporate natural language to specify the range of experience. For example: User can ask show me doctors with experience above 10 years, or show me doctors with experience between 5 and 10 years. You need to extract this information and convert it to the correct format.
-
-        Focus only on the following fields, and extract them **only if they are clearly mentioned**:
-
-        - **location**: A City
-        - **min_price**: Minimum price in SAR
-        - **max_price**: Maximum price in SAR
-        - **min_rating**: Minimum acceptable rating (0–5 scale)
-        - **min_experience**: Minimum required years of experience
-        - **doctor_name**: Name of the doctor (remove title like “Dr.” or “Doctor”)
-        - **branch_name**: Clinic or branch name
-        - **gender**: Gender preference (either "Male" or "Female")
-
-        **Output a JSON object** using the format below. Include only the fields that are explicitly or implicitly mentioned:
-
-        ```json
+        system_prompt = """Extract search criteria from the user's message into a structured format. Focus on:
+        - Location (city names like Riyadh, Jeddah, Mecca, Medina, Dammam) for Non Enlish messages convert it to English.
+        - Price range (min and max in SAR) in western numbers.
+        - Rating requirements (minimum rating out of 5) in western numbers.
+        - Experience requirements (minimum years) in western numbers.
+        - Doctor name if mentioned (with title Dr/Doctor removed)
+        - Clinic/branch name if mentioned
+        - Gender preference ('male' or 'female' doctor) nothing outside these two options.
+        
+        Return ONLY a JSON object with these fields (include only if mentioned):
         {
-        "location": "city_name",
-        "min_price": number,
-        "max_price": number,
-        "min_rating": number,
-        "min_experience": number,
-        "doctor_name": "name",
-        "branch_name": "name",
-        "gender": "Male" or "Female"
+            "location": "city_name",
+            "min_price": number,
+            "max_price": number,
+            "min_rating": number,
+            "min_experience": number,
+            "doctor_name": "name",
+            "branch_name": "name",
+            "gender": "male" or "female"
         }
-
         """
         
         # Add message for extraction

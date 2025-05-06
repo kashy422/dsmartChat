@@ -191,36 +191,37 @@ def detect_symptoms_and_specialties(user_message: str) -> Dict[str, Any]:
         
         TASK:
         1. FIRST determine if the user's message is describing medical symptoms or health concerns.
-        2. If it IS describing symptoms, match these symptoms to appropriate specialties from the database.
+        2. If it is describing symptoms, match these symptoms to appropriate specialties from the database.
         3. If it is NOT describing symptoms, respond accordingly.
+        4. If message is not in English, you will still analyze it and detect symptoms in English language. 
         
         IMPORTANT NOTES:
-        - The word "Hammad" is a common Arabic greeting similar to "Hello" - it is NOT a symptom or a person's name
-        - Common greeting phrases like "hello", "hi", "hey", "salam", "marhaba", etc. are NOT symptom descriptions
-        - Very short messages with just greetings should be classified as NOT describing symptoms
+        - The word "Hammad" is a common Arabic greeting similar to "Hello" - it is NOT a symptom or a person's name.
+        - Common greeting phrases like "hello", "hi", "hey", "salam", "marhaba", etc. are NOT symptom descriptions.
+        - Very short messages with just greetings should be classified as NOT describing symptoms.
         
         SPECIALTY DATABASE:
         Use ONLY the following specialty data loaded from our medical database:
         {specialty_data}
         
         ANALYSIS STEPS (only if message describes symptoms):
-        1. Identify all symptoms and health concerns in the user's message
-        2. Match these symptoms to the most appropriate medical specialties in the database
-        3. For each match, determine the level of confidence (0.0-1.0)
-        4. Prioritize specialties that directly address the primary symptoms
+        1. Identify all symptoms and health concerns in the user's message. 
+        2. Match these symptoms to the most appropriate medical specialties in the database if Non English message than still analyze it and detect symptoms in English language.
+        3. For each match, determine the level of confidence (0.0-1.0).
+        4. Prioritize specialties that directly address the primary symptoms.
         
         REQUIREMENTS:
-        - ONLY recommend specialties and subspecialties that are listed in the provided database
-        - Use EXACT names of specialties and subspecialties as they appear in the database
-        - Do NOT invent or suggest specialties not in the database
-        - Assign realistic confidence levels (higher for clearer symptom matches)
+        - ONLY recommend specialties and subspecialties that are listed in the provided database.
+        - Use EXACT names of specialties and subspecialties as they appear in the database for non English messages also.
+        - Do NOT invent or suggest specialties not in the database.
+        - Assign realistic confidence levels (higher for clearer symptom matches).
         
         RESPONSE FORMAT:
         Return a JSON object with these fields:
         - is_describing_symptoms: boolean (true if message describes symptoms, false otherwise)
         
         If is_describing_symptoms is true, also include:
-        - detected_symptoms: List of all identified symptoms and health concerns
+        - detected_symptoms: List of all identified symptoms and health concerns from user message
         - recommended_specialties: Array of objects, each containing:
           * name: The specialty name exactly as it appears in the database
           * subspecialty: The subspecialty name exactly as it appears in the database
