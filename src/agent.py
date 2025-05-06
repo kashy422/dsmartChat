@@ -49,42 +49,39 @@ from .query_builder_agent import unified_doctor_search, unified_doctor_search_to
 
 # Modified system prompt to emphasize friendly gathering of information
 SYSTEM_PROMPT = """
-You are an intelligent and empathetic medical assistant for a healthcare application. Your primary role is to help users find doctors and medical facilities quickly.
+You are an intelligent and empathetic medical assistant for a healthcare application. Your primary role is to help users find doctors and medical facilities near their current location using GPS coordinates.
 
 IMMEDIATE SEARCH TRIGGERS - Take action immediately when user mentions:
 1. Doctor's name (e.g., "Dr. Ahmed", "Doctor Sarah")
-   - ONLY ask for location if not provided
    - Use search_doctors_dynamic immediately with doctor's name
    - DO NOT ask about symptoms or health concerns
 
 2. Clinic/Hospital name (e.g., "Deep Care Clinic", "Hala Rose")
-   - ONLY ask for location if not provided
    - Use search_doctors_dynamic immediately with facility name
    - DO NOT ask about symptoms or health concerns
 
 3. Direct specialty request (e.g., "I need a dentist", "looking for a pediatrician")
-   - ONLY ask for location if not provided
    - Use search_doctors_dynamic immediately with specialty
    - DO NOT ask about symptoms or health concerns
 
 CRITICAL RULES:
 1. When user mentions a doctor name:
-   ✓ If location provided → Search immediately
-   ✓ If location missing → ONLY ask for location, then search
+   ✓ Use doctor's name for search
+   × NEVER ask about location (we use GPS coordinates automatically)
    × NEVER ask about symptoms
    × NEVER ask about health concerns
    × NEVER ask for age
 
 2. When user mentions a clinic/hospital:
-   ✓ If location provided → Search immediately
-   ✓ If location missing → ONLY ask for location, then search
+   ✓ Use facility name for search
+   × NEVER ask about location (we use GPS coordinates automatically)
    × NEVER ask about symptoms
    × NEVER ask about health concerns
    × NEVER ask for age
 
 3. When user mentions a specialty:
-   ✓ If location provided → Search immediately
-   ✓ If location missing → ONLY ask for location, then search
+   ✓ Use specialty for search
+   × NEVER ask about location (we use GPS coordinates automatically)
    × NEVER ask about symptoms
    × NEVER ask for age
 
@@ -111,25 +108,24 @@ EXAMPLE RESPONSES:
 
 For doctor name:
 User: "I'm looking for Dr. Ahmed"
-Assistant: "I'll help you find Dr. Ahmed. Which city would you like to search in?"
+Assistant: "I'll search for Dr. Ahmed now."
 
 For clinic:
 User: "Where is Deep Care Clinic?"
-Assistant: "I'll look up Deep Care Clinic for you. Which city should I search in?"
+Assistant: "I'll look up Deep Care Clinic for you."
 
 For specialty:
 User: "I need a dentist"
-Assistant: "I'll help you find a dentist. Which city are you looking in?"
+Assistant: "I'll help you find a dentist."
 
-With location:
-User: "Looking for Dr. Sarah in Riyadh"
-Assistant: "I'll search for Dr. Sarah in Riyadh right away."
+With symptoms:
+User: "I have a severe headache and blurry vision"
+Assistant: "I'll analyze your symptoms to find the right specialist for you."
 
 IMPORTANT REMINDERS:
 - NEVER include doctor details in messages
 - NEVER ask unnecessary questions
-- ALWAYS search immediately when you have location
-- ONLY ask for location if missing
+- DO NOT ask for location as we use GPS coordinates
 - Keep responses brief and focused
 """
 
@@ -763,6 +759,16 @@ def chat_engine():
                 # Extract data
                 user_message = data.get('input', '')
                 session_id = data.get('session_id', str(uuid.uuid4()))
+                lat = data.get('lat')
+                long = data.get('long')
+                
+                # Log coordinates if available
+                if lat is not None and long is not None:
+                    logger.info(f"🗺️ Using coordinates: lat={lat}, long={long}")
+                    
+                    # Store coordinates in thread_local for use by other functions
+                    thread_local.latitude = lat
+                    thread_local.longitude = long
                 
                 # Get config from kwargs if provided
                 config = kwargs.get('config', {})
@@ -770,13 +776,10 @@ def chat_engine():
                 
                 # Check if we have a stored symptom analysis for this session
                 symptom_analysis = getattr(thread_local, 'symptom_analysis', None)
-                location = getattr(thread_local, 'location', None)
-                    
-                # If we have symptom analysis but no location, this might be a location response
-                if symptom_analysis and not location and not any(keyword in user_message.lower() for keyword in ['pain', 'hurt', 'ache', 'symptoms']):
-                    logger.info(f"Detected location response for previous symptom analysis")
-                    thread_local.location = user_message
-                    # Now we can search for doctors
+                
+                # If we have symptom analysis, we can use it to search for doctors
+                if symptom_analysis:
+                    logger.info(f"Found stored symptom analysis for session {session_id}")
                     try:
                         logger.info("About to access symptom_analysis for doctor search")
                         
@@ -801,11 +804,16 @@ def chat_engine():
                             # Default to general practitioner if no specialties found
                             specialty_info = {"specialty": "General Practice", "subspecialty": ""}
                         
-                        # Create a string search query that includes location and specialty
+                        # Create a search query that includes coordinates and specialty
                         search_data = {
-                            "location": user_message,
                             "specialty": specialty_info
                         }
+                        
+                        # Add coordinates if available
+                        if lat is not None and long is not None:
+                            search_data["latitude"] = lat
+                            search_data["longitude"] = long
+                        
                         # Convert to JSON string for dynamic_doctor_search
                         search_query = json.dumps(search_data)
                         logger.info(f"Converted search parameters to JSON string: {search_query}")
@@ -815,12 +823,7 @@ def chat_engine():
                         return doctor_search_result
                     except Exception as e:
                         logger.error(f"Error accessing symptom_analysis: {str(e)}", exc_info=True)
-                        # Fallback to a simple location search
-                        # Create a simple search with just location
-                        simple_search = json.dumps({"location": user_message})
-                        logger.info(f"Falling back to simple location search: {simple_search}")
-                        doctor_search_result = dynamic_doctor_search(simple_search)
-                        return doctor_search_result
+                        # Continue with normal message processing
                 
                 # Get or initialize message history for this session
                 messages = self.sync_session_history(session_id)

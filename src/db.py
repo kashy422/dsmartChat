@@ -353,11 +353,27 @@ class DB:
                             row[key] = float(value)
                 
                 logger.info(f"Got {len(rows)} results from stored procedure")
-                return rows
+                
+                # Add detailed logging to inspect the data structure
+                if rows:
+                    logger.info(f"Sample first row keys: {list(rows[0].keys())}")
+                    logger.info(f"Returning rows as direct result (not nested in 'data.doctors')")
+                    
+                    # Format the response to match what unified_doctor_search expects
+                    result_dict = {
+                        "data": {
+                            "doctors": rows
+                        }
+                    }
+                    logger.info(f"Formatted result with data.doctors structure containing {len(rows)} doctors")
+                    return result_dict
+                else:
+                    logger.info("No rows returned, returning empty result dict")
+                    return {"data": {"doctors": []}}
                 
         except Exception as e:
             logger.error(f"Error executing stored procedure: {str(e)}")
-            return []  # Return empty list instead of raising exception for better error handling
+            return {"data": {"doctors": []}}  # Return structured empty result
 
     def execute_query(self, query: str, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """

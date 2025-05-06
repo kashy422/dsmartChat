@@ -109,8 +109,9 @@ def dynamic_doctor_search(user_query: str) -> Dict[str, Any]:
     This analyzes the user's input and performs a dynamic search for doctors.
     
     Args:
-        user_query: Either a natural language query string like "find a dentist in Riyadh"
+        user_query: Either a natural language query string like "find a dentist"
                    or a JSON string containing structured criteria including specialty information
+                   and optional latitude/longitude coordinates
         
     Returns:
         Dictionary with doctors array and search metadata
@@ -130,12 +131,30 @@ def dynamic_doctor_search(user_query: str) -> Dict[str, Any]:
         # Get any previously stored symptom analysis if available
         symptom_analysis = getattr(thread_local, 'symptom_analysis', None)
         
+        # Check if we have coordinates stored in thread_local
+        lat = getattr(thread_local, 'latitude', None)
+        long = getattr(thread_local, 'longitude', None)
+        
+        if lat is not None and long is not None:
+            logger.info(f"Using coordinates from thread_local: lat={lat}, long={long}")
+        
         # Check if the input is a JSON string containing structured criteria
         if isinstance(user_query, str) and user_query.strip().startswith('{') and user_query.strip().endswith('}'):
             try:
                 # Parse JSON string to structured criteria
                 structured_criteria = json.loads(user_query)
                 logger.info(f"Detected structured criteria in JSON format: {structured_criteria}")
+                
+                # Check for latitude and longitude in the structured criteria
+                if "latitude" in structured_criteria and "longitude" in structured_criteria:
+                    lat = structured_criteria["latitude"]
+                    long = structured_criteria["longitude"]
+                    logger.info(f"Using coordinates from JSON criteria: lat={lat}, long={long}")
+                # If no coordinates in criteria but we have them in thread_local, add them
+                elif lat is not None and long is not None:
+                    structured_criteria["latitude"] = lat
+                    structured_criteria["longitude"] = long
+                    logger.info(f"Added thread_local coordinates to structured criteria")
                 
                 # Handle specialty information that might be nested
                 if "specialty" in structured_criteria and isinstance(structured_criteria["specialty"], dict):
@@ -177,6 +196,14 @@ def dynamic_doctor_search(user_query: str) -> Dict[str, Any]:
         # If the input is a dictionary with specialty data, use it directly
         if isinstance(user_query, dict):
             logger.info(f"Using provided dictionary criteria: {user_query}")
+            
+            # If we have coordinates but they're not in the criteria, add them
+            if "latitude" not in user_query and "longitude" not in user_query:
+                if lat is not None and long is not None:
+                    user_query["latitude"] = lat
+                    user_query["longitude"] = long
+                    logger.info(f"Added thread_local coordinates to dictionary criteria")
+            
             search_result = unified_doctor_search_tool(user_query)
             return ensure_proper_doctor_search_format(search_result, str(user_query))
         
@@ -229,6 +256,12 @@ def dynamic_doctor_search(user_query: str) -> Dict[str, Any]:
             except Exception as e:
                 logger.error(f"Error extracting specialty from symptom analysis: {str(e)}")
         
+        # Add coordinates to combined criteria if available
+        if lat is not None and long is not None:
+            combined_criteria["latitude"] = lat
+            combined_criteria["longitude"] = long
+            logger.info(f"Added coordinates to combined criteria: lat={lat}, long={long}")
+        
         # Always include the original query for context
         combined_criteria['original_message'] = user_query
         
@@ -243,6 +276,7 @@ def dynamic_doctor_search(user_query: str) -> Dict[str, Any]:
             "original_query": user_query,
             "extracted_criteria": criteria_result.get("criteria", {}) if criteria_result else {},
             "symptom_data_used": True if symptom_analysis else False,
+            "coordinates_used": True if (lat is not None and long is not None) else False,
             "combined_criteria": combined_criteria
         }
         

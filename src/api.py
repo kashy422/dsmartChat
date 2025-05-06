@@ -121,7 +121,9 @@ def get_token_usage(response):
 async def chat(
     message: str = Form(None),
     session_id: str = Form(...),
-    audio: UploadFile = File(None)
+    audio: UploadFile = File(None),
+    lat : Optional[float] = Form(None),
+    long : Optional[float] = Form(None),
 ):
     start_time = time.time()
     
@@ -147,7 +149,7 @@ async def chat(
                     )
             
                     # Process transcribed message
-                    response = process_message(transcription, session_id)
+                    response = process_message(transcription, session_id, lat, long)
                     
                     # Generate audio response
                 audio_base64 = await text_to_speech(response['response']['message'])
@@ -175,7 +177,11 @@ async def chat(
         
             # Handle text input
         if message:
-                response = process_message(message, session_id)
+                print("-------------------------")
+                print("LAT: ", lat)
+                print("LONG: ", long)
+                print("-------------------------")
+                response = process_message(message, session_id, lat, long)
                 return response
             
     except Exception as e:
@@ -188,14 +194,21 @@ async def chat(
             }
         }
 
-def process_message(message: str, session_id: str) -> dict:
+def process_message(message: str, session_id: str, lat: float = None, long: float = None) -> dict:
     """Process incoming message by sending it to the agent"""
     try:
         logger.info(f"Processing message for session {session_id}")
+        if lat is not None and long is not None:
+            logger.info(f"Using coordinates: lat={lat}, long={long}")
         
         # Forward the message to the agent and get response
         response = engine.invoke(
-            {"input": message, "session_id": session_id},
+            {
+                "input": message, 
+                "session_id": session_id,
+                "lat": lat,
+                "long": long
+            },
             config={
                 "configurable": {"session_id": session_id},
                 "callbacks": [callBackHandler]

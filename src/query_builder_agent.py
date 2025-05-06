@@ -28,6 +28,8 @@ class SearchCriteria(BaseModel):
     speciality: Optional[str] = None
     subspeciality: Optional[str] = None
     location: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     min_rating: Optional[float] = None
     max_price: Optional[float] = None
     min_price: Optional[float] = None
@@ -47,13 +49,13 @@ class SearchCriteria(BaseModel):
 
 def build_query(criteria: SearchCriteria) -> Tuple[str, Dict[str, Any]]:
     """
-    Build WHERE clause for SpDyamicQueryBuilder stored procedure
+    Build parameters for SpDyamicQueryBuilderLatLng stored procedure
     
     Args:
         criteria: SearchCriteria object containing search parameters
         
     Returns:
-        Tuple of (stored procedure name, parameters dictionary with where clause)
+        Tuple of (stored procedure name, parameters dictionary)
     """
     try:
         # Log the criteria we're using
@@ -98,14 +100,12 @@ def build_query(criteria: SearchCriteria) -> Tuple[str, Dict[str, Any]]:
                     where_conditions.append(f"AND s.SubSpeciality = N'{sub_value}'")
                 else:
                     # Fix the string replacement for single quotes in the IN clause
-                    # subspecialties_list = ", ".join([f"N'{sub.replace('\'', '\'\'')}'" for sub in subspecialties])
-                    subspecialties_list = ", ".join([f"N'{sub.replace("'", "''")}'" for sub in subspecialties])
-                    where_conditions.append(f"AND s.SubSpeciality IN ({subspecialties_list})")
-        
-        # Location search
-        if criteria.location:
-            location_pattern = criteria.location.replace("'", "''")
-            where_conditions.append(f"AND (b.Address_en LIKE N'%{location_pattern}%' OR b.Address_ar LIKE N'%{location_pattern}%' OR b.BranchName_en LIKE N'%{location_pattern}%' OR b.BranchName_ar LIKE N'%{location_pattern}%')")
+                    subspecialties_list = []
+                    for sub in subspecialties:
+                        escaped_sub = sub.replace("'", "''")
+                        subspecialties_list.append(f"N'{escaped_sub}'")
+                    subspecialties_str = ", ".join(subspecialties_list)
+                    where_conditions.append(f"AND s.SubSpeciality IN ({subspecialties_str})")
         
         # Rating filter
         if criteria.min_rating is not None:
@@ -134,8 +134,17 @@ def build_query(criteria: SearchCriteria) -> Tuple[str, Dict[str, Any]]:
             
         logger.info(f"Built WHERE clause: {where_clause}")
         
+        # Create parameters dictionary with latitude, longitude, and WHERE clause
+        params = {
+            "@Latitude": criteria.latitude if criteria.latitude is not None else 0.0,
+            "@Longitude": criteria.longitude if criteria.longitude is not None else 0.0,
+            "@DynamicWhereClause": where_clause
+        }
+        
+        logger.info(f"Using coordinates: Lat={params['@Latitude']}, Long={params['@Longitude']}")
+        
         # Return stored procedure name and parameters
-        return "[dbo].[SpDyamicQueryBuilder]", {"@DynamicWhereClause": where_clause}
+        return "[dbo].[SpDyamicQueryBuilderLatLng]", params
         
     except Exception as e:
         logger.error(f"Error building query: {str(e)}")
@@ -150,7 +159,8 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
         input_data: Either a string (natural language query) or dict containing:
             - speciality: Specialty from symptom analysis
             - subspeciality: Subspecialty from symptom analysis
-            - location: Optional location
+            - latitude: Optional latitude coordinate
+            - longitude: Optional longitude coordinate
             - other search criteria parameters
         
     Returns:
@@ -200,180 +210,149 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
                         if subspecialty_name:
                             specialty_criteria['subspeciality'] = subspecialty_name
                             
-                        if specialty_criteria:
-                            logger.info(f"DOCTOR SEARCH: Adding specialty from symptom analysis: {specialty_criteria}")
-                            final_criteria.update(specialty_criteria)
+                        logger.info(f"DOCTOR SEARCH: Using specialty from symptom analysis: {specialty_criteria}")
+                        final_criteria.update(specialty_criteria)
                 except Exception as e:
-                    logger.error(f"DOCTOR SEARCH: Error getting specialty info: {str(e)}")
-            
-            # Save original message
-            final_criteria['original_message'] = input_data
+                    logger.error(f"DOCTOR SEARCH: Error extracting specialty from symptom analysis: {str(e)}")
         else:
-            logger.info("DOCTOR SEARCH: Using provided dictionary criteria")
-            # Use the directly provided criteria
+            # Handle dictionary input
+            logger.info("DOCTOR SEARCH: Processing dictionary input")
             final_criteria.update(input_data)
-        
-        # Create criteria object
-        criteria = SearchCriteria(**final_criteria)
-        logger.info(f"DOCTOR SEARCH: Final search criteria: {criteria.dict(exclude_none=True)}")
-        
-        # Log warning if no significant criteria
-        if not criteria.speciality and not criteria.location and not criteria.doctor_name and not criteria.branch_name:
-            logger.warning("DOCTOR SEARCH: No significant search criteria found!")
             
-            # Try to get specialty from symptom analysis as a last resort
-            symptom_analysis = getattr(thread_local, 'symptom_analysis', None)
-            current_session_id = getattr(thread_local, 'session_id', None)
-            
-            # Only use symptom analysis if it exists and belongs to the current session
-            if symptom_analysis:
-                # Check if this symptom analysis has a session_id and matches current session
-                analysis_session = getattr(symptom_analysis, 'session_id', None)
-                
-                if analysis_session and analysis_session != current_session_id:
-                    logger.warning(f"DOCTOR SEARCH: Ignoring symptom analysis from different session (analysis: {analysis_session}, current: {current_session_id})")
-                    symptom_analysis = None
+            # Handle specialty field that might be in different formats
+            if 'specialty' in input_data and not 'speciality' in input_data:
+                # If specialty is a dict with specialty/subspecialty, extract and use standardized field names
+                if isinstance(input_data['specialty'], dict):
+                    specialty_obj = input_data['specialty']
+                    if 'specialty' in specialty_obj or 'name' in specialty_obj:
+                        final_criteria['speciality'] = specialty_obj.get('specialty') or specialty_obj.get('name')
+                    if 'subspecialty' in specialty_obj:
+                        final_criteria['subspeciality'] = specialty_obj['subspecialty']
+                    # Remove the original field to avoid confusion
+                    if 'specialty' in final_criteria:
+                        del final_criteria['specialty']
                 else:
-                    # Log that we're using symptom analysis from the current session
-                    logger.info(f"DOCTOR SEARCH: Using symptom analysis from current session")
-            
-            if symptom_analysis:
-                try:
-                    # Look for specialties in multiple possible locations
-                    specialties = []
+                    # Simple string value - copy to standard field name
+                    final_criteria['speciality'] = input_data['specialty']
+                    if 'specialty' in final_criteria:
+                        del final_criteria['specialty']
                     
-                    # Check various possible locations for specialty data
-                    if 'symptom_analysis' in symptom_analysis:
-                        sa = symptom_analysis.get('symptom_analysis', {})
-                        if 'matched_specialties' in sa and sa['matched_specialties']:
-                            specialties = sa['matched_specialties']
-                        elif 'recommended_specialties' in sa and sa['recommended_specialties']:
-                            specialties = sa['recommended_specialties']
-                        elif 'specialties' in sa and sa['specialties']:
-                            specialties = sa['specialties']
-                    
-                    # Process the first specialty if available
-                    if specialties and len(specialties) > 0:
-                        top_specialty = specialties[0]
-                        specialty = top_specialty.get('specialty') or top_specialty.get('name')
-                        subspecialty = top_specialty.get('subspecialty')
-                        
-                        if specialty:
-                            logger.info(f"DOCTOR SEARCH: Using specialty '{specialty}' from symptom analysis")
-                            criteria.speciality = specialty
-                            
-                            if subspecialty:
-                                logger.info(f"DOCTOR SEARCH: Using subspecialty '{subspecialty}' from symptom analysis")
-                                criteria.subspeciality = subspecialty
-                except Exception as e:
-                    logger.error(f"DOCTOR SEARCH: Error getting specialty from symptom analysis: {str(e)}")
-        
-        # Build and execute query
-        query, params = build_query(criteria)
-        
-        # Add detailed debug logging for the SQL query
-        debug_sql = f"""
-        -- Debug SQL for SpDyamicQueryBuilder 
-        EXEC [dbo].[SpDyamicQueryBuilder] @DynamicWhereClause = N'{params["@DynamicWhereClause"]}'
-        """
-        logger.info(f"DOCTOR SEARCH: SQL Query to execute:\n{debug_sql}")
-        
-        # Execute the stored procedure
-        logger.info(f"DOCTOR SEARCH: Executing query: {query} with params: {params}")
-        results = db.execute_stored_procedure(query, params)
-        logger.info(f"DOCTOR SEARCH: Got {len(results) if results else 0} results")
-        
-        # Format results
-        doctors = []
-        for row in results:
-            # Get values with proper type conversion and fallbacks
-            doctor = {
-                "DoctorId": row.get('DoctorId'),
-                "DoctorName_ar": row.get('DoctorName_ar'),
-                "DoctorName_en": row.get('DoctorName_en'),
-                "Rating": float(row.get('Rating')) if row.get('Rating') is not None else 0,
-                "Fee": float(row.get('Fee')) if row.get('Fee') is not None else 0,
-                "Speciality": row.get('Speciality'),  # Note: Stored proc uses 'Speciality' not 'Specialty'
-                "Subspecialities": row.get('Subspecialities'),  # Match the stored proc column name
-                "Branch_ar": row.get('Branch_ar'),
-                "Branch_en": row.get('Branch_en'),
-                "Address_ar": row.get('Address_ar'),
-                "Address_en": row.get('Address_en'),
-                "DiscountValue": float(row.get('DiscountValue')) if row.get('DiscountValue') is not None else 0,
-                "DiscountType": row.get('DiscountType', 'None'),
-                "HasDiscount": bool(row.get('HasDiscount', False)),
-                "Gender": row.get('Gender', ''),
-                "Experience": float(row.get('Experience')) if row.get('Experience') is not None else 0
-            }
-            doctors.append(doctor)
-        
-        # Get session info from thread_local
-        session_id = getattr(thread_local, 'session_id', '')
-        patient_info = getattr(thread_local, 'patient_info', {}) or {}
-        symptom_info = getattr(thread_local, 'symptom_analysis', {}) or {}
-        
-        # Calculate processing time
-        end_time = time.time()
-        processing_time = end_time - start_time
+        # Get coordinates from thread_local if they exist and aren't in the final criteria
+        if 'latitude' not in final_criteria or 'longitude' not in final_criteria:
+            lat = getattr(thread_local, 'latitude', None)
+            long = getattr(thread_local, 'longitude', None)
             
-        response = {
-            "response": {
-                "message": f"I've found {len(doctors)} doctors that may be able to help with your issue.",
-                "patient": {
-                    "Name": patient_info.get('name', ''),
-                    "Gender": patient_info.get('gender', ''),
-                    "Location": criteria.location or patient_info.get('location', ''),
-                    "Issue": symptom_info.get('symptom_description', ''),
-                    "session_id": session_id
-                },
-                "data": doctors
-            },
-            "processing_time": processing_time,
-            "performance": {
-                "total_time": round(processing_time, 2),
-                "processing_time": round(processing_time, 2)
-            }
-        }
+            if lat is not None and long is not None:
+                logger.info(f"DOCTOR SEARCH: Using coordinates from thread_local: lat={lat}, long={long}")
+                final_criteria['latitude'] = lat
+                final_criteria['longitude'] = long
         
-        # Create a simple message without doctor details
-        specialty_text = criteria.speciality or "medical"
-        location_text = f" in {criteria.location}" if criteria.location else ""
+        # Ensure coordinates are always present (use defaults if not provided)
+        if 'latitude' not in final_criteria:
+            final_criteria['latitude'] = 0.0
+            logger.info("DOCTOR SEARCH: Using default latitude 0.0")
+        if 'longitude' not in final_criteria:
+            final_criteria['longitude'] = 0.0
+            logger.info("DOCTOR SEARCH: Using default longitude 0.0")
+            
+        # Always include the original query for context
+        if isinstance(input_data, str):
+            final_criteria['original_message'] = input_data
         
-        # Generate an appropriate message without doctor details
-        if len(doctors) > 0:
-            message = f"I found {len(doctors)} {specialty_text} specialists{location_text} based on your search."
-        else:
-            message = f"We are currently certifying doctors in our network. Please check back soon for {specialty_text} specialists{location_text}."
+        # Log the final criteria being used
+        logger.info(f"DOCTOR SEARCH: Final search criteria: {final_criteria}")
         
-        # Replace the detailed message with a simple one
-        response["response"]["message"] = message
-        
-        logger.info(f"DOCTOR SEARCH: Returning response with {len(doctors)} doctors")
-        return response
-        
-    except Exception as e:
-        logger.error(f"DOCTOR SEARCH ERROR: {str(e)}", exc_info=True)
+        # Build and execute the query
         try:
+            proc_name, params = build_query(SearchCriteria(**final_criteria))
+            
+            logger.info(f"DOCTOR SEARCH: Executing stored procedure: {proc_name}")
+            result = db.execute_stored_procedure(proc_name, params)
+            
+            # Add detailed logging to inspect the result structure
+            logger.info(f"DOCTOR SEARCH: Database result type: {type(result)}")
+            logger.info(f"DOCTOR SEARCH: Database result keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
+            
+            if isinstance(result, dict):
+                for key in result.keys():
+                    logger.info(f"DOCTOR SEARCH: Result[{key}] type: {type(result[key])}")
+                    if isinstance(result[key], dict):
+                        logger.info(f"DOCTOR SEARCH: Result[{key}] keys: {list(result[key].keys())}")
+            
+            if result is None or 'data' not in result:
+                logger.warning("DOCTOR SEARCH: Empty result returned from database")
+                result = {"data": {"doctors": []}}
+            
+            # Clean and standardize the result
+            # Standardize datetime and float/decimal fields to be JSON serializable
+            data = {"doctors": []}
+            if 'data' in result and 'doctors' in result['data'] and isinstance(result['data']['doctors'], list):
+                doctors = result['data']['doctors']
+                logger.info(f"DOCTOR SEARCH: Found {len(doctors)} doctors in result['data']['doctors']")
+                data["doctors"] = doctors
+            elif 'doctors' in result and isinstance(result['doctors'], list):
+                # Try alternative structure
+                doctors = result['doctors']
+                logger.info(f"DOCTOR SEARCH: Found {len(doctors)} doctors in result['doctors']")
+                data["doctors"] = doctors
+            else:
+                logger.warning(f"DOCTOR SEARCH: Could not find doctors array in result structure")
+            
+            # Create standardized response format
+            search_response = {
+                "message": f"Found {len(data['doctors'])} doctors matching your criteria",
+                "patient": {"session_id": getattr(thread_local, 'session_id', '')},
+                "data": data["doctors"],
+                "criteria": final_criteria
+            }
+            
+            # Track processing time
             end_time = time.time()
-            processing_time = end_time - start_time
-        except:
-            processing_time = 0
+            execution_time = end_time - start_time
+            
+            # Add performance metrics
+            search_response["processing_time"] = execution_time
+            
+            # Create the standard response format
+            final_result = {
+                "response": search_response,
+                "performance": {
+                    "total_time": execution_time,
+                    "processing_time": execution_time
+                }
+            }
+            
+            return final_result
+        
+        except Exception as query_error:
+            logger.error(f"DOCTOR SEARCH: Error executing search query: {str(query_error)}")
+            # Return standardized error response
             return {
             "response": {
-                "message": f"We are currently certifying doctors in our network. Please check back soon.",
-                "patient": {
-                    "Name": "",
-                    "Gender": "",
-                    "Location": "",
-                    "Issue": "",
-                    "session_id": getattr(thread_local, 'session_id', '')
+                    "message": "Error searching for doctors, please try again.",
+                    "patient": {"session_id": getattr(thread_local, 'session_id', '')},
+                    "data": [],
+                    "criteria": final_criteria
                 },
+            "performance": {
+                    "total_time": time.time() - start_time,
+                    "processing_time": 0
+                }
+            }
+        
+    except Exception as e:
+        logger.error(f"DOCTOR SEARCH: Unexpected error in unified search: {str(e)}")
+        # Create a fallback response
+        execution_time = time.time() - start_time
+        return {
+            "response": {
+                "message": "We are currently certifying doctors in our network. Please check back soon.",
+                "patient": {"session_id": getattr(thread_local, 'session_id', '')},
                 "data": []
             },
-            "processing_time": processing_time,
             "performance": {
-                "total_time": round(processing_time, 2),
-                "processing_time": round(processing_time, 2)
+                "total_time": execution_time,
+                "processing_time": 0
             }
         }
 
@@ -391,7 +370,6 @@ def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
     try:
         # Prepare prompt for criteria extraction
         system_prompt = """Extract search criteria from the user's message into a structured format. Focus on:
-        - Location (city names like Riyadh, Jeddah, Mecca, Medina, Dammam) for Non Enlish messages convert it to English.
         - Price range (min and max in SAR) in western numbers.
         - Rating requirements (minimum rating out of 5) in western numbers.
         - Experience requirements (minimum years) in western numbers.
@@ -401,7 +379,6 @@ def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
         
         Return ONLY a JSON object with these fields (include only if mentioned):
         {
-            "location": "city_name",
             "min_price": number,
             "max_price": number,
             "min_rating": number,
@@ -435,12 +412,6 @@ def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
             
             # Validate and clean the extracted data
             criteria = {}
-            
-            # Location validation
-            if "location" in extracted:
-                location = extracted["location"].capitalize()
-                if location in ["Riyadh", "Jeddah", "Mecca", "Medina", "Dammam"]:
-                    criteria["location"] = location
             
             # Numeric fields validation
             if "min_price" in extracted and isinstance(extracted["min_price"], (int, float)):
@@ -481,15 +452,6 @@ def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
 
 def _fallback_extraction(message: str) -> Dict[str, Any]:
     """Fallback extraction for when GPT fails"""
-    # Extract location from message
-    location = None
-    words = message.lower().split()
-    cities = ["riyadh", "jeddah", "mecca", "medina", "dammam"]
-    for city in cities:
-        if city in words:
-            location = city.capitalize()
-            break
-            
     # Extract gender if mentioned
     gender = None
     if "male doctor" in message.lower() or "man doctor" in message.lower():
@@ -499,8 +461,6 @@ def _fallback_extraction(message: str) -> Dict[str, Any]:
             
     # Build criteria dictionary
     criteria = {}
-    if location:
-        criteria["location"] = location
     if gender:
         criteria["gender"] = gender
             
@@ -646,8 +606,6 @@ def extract_search_criteria_tool(user_query: str) -> Dict[str, Any]:
         missing_info = []
         if not extracted.get('speciality') and not extracted.get('doctor_name') and not extracted.get('branch_name'):
             missing_info.append('specialty')
-        if not extracted.get('location'):
-            missing_info.append('location')
             
         # Store the extracted criteria in thread_local for later use
         thread_local.extracted_criteria = extracted
