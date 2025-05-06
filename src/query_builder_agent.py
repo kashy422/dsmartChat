@@ -95,12 +95,13 @@ def build_query(criteria: SearchCriteria) -> Tuple[str, Dict[str, Any]]:
                 subspecialties = [s.strip() for s in criteria.subspeciality.split(',')] if ',' in criteria.subspeciality else [criteria.subspeciality]
                 if len(subspecialties) == 1:
                     sub_value = subspecialties[0].replace("'", "''")
-                    where_conditions.append(f"AND s.SubSpeciality = N'{sub_value}'")
+                    where_conditions.append(f"AND ds.Subspecialities = N'{sub_value}'")
                 else:
                     # Fix the string replacement for single quotes in the IN clause
                     # subspecialties_list = ", ".join([f"N'{sub.replace('\'', '\'\'')}'" for sub in subspecialties])
-                    subspecialties_list = ", ".join([f"N'{sub.replace("'", "''")}'" for sub in subspecialties])
-                    where_conditions.append(f"AND s.SubSpeciality IN ({subspecialties_list})")
+                    subspecialties_list = ", ".join([f"N'{sub}'" for sub in subspecialties])
+
+                    where_conditions.append(f"AND ds.Subspecialities IN ({subspecialties_list})")
         
         # Location search
         if criteria.location:
