@@ -1277,6 +1277,9 @@ def chat_engine():
                         logger.info(f"🔧 Model requested tool call: {response_message.tool_calls}")
                         tool_results = []
                         
+                        # First add the assistant message with tool calls
+                        messages.append(response_message.model_dump())
+                        
                         for tool_call in response_message.tool_calls:
                             function_name = tool_call.function.name
                             function_args = json.loads(tool_call.function.arguments)
@@ -1301,11 +1304,12 @@ def chat_engine():
                                 # Record this execution in history
                                 history.add_tool_execution("store_patient_details", result)
                                 
-                                tool_results.append({
-                                    "tool_call_id": tool_call.id,
+                                # Add tool result immediately after the tool call
+                                messages.append({
                                     "role": "tool",
-                                    "name": function_name,
-                                    "content": json.dumps(result)
+                                    "content": json.dumps(result),
+                                    "tool_call_id": tool_call.id,
+                                    "name": function_name
                                 })
                                 
                             elif function_name == "search_doctors_dynamic":
@@ -1328,43 +1332,30 @@ def chat_engine():
                                     if isinstance(validated_result, dict) and isinstance(validated_result.get("response"), dict):
                                         validated_result["response"]["is_doctor_search"] = True
                                     
-                                    # Ensure the message doesn't include detailed doctor information
-                                    if "message" in validated_result:
-                                        # Extract doctor count and specialty
-                                        doctor_count = validated_result.get("doctor_count", 0)
-                                        specialty = validated_result.get("specialty", "doctors")
-                                        location = validated_result.get("location", "")
-                                        
-                                        # Create a simple message without doctor details
-                                        location_text = f" in {location}" if location else ""
-                                        if doctor_count > 0:
-                                            validated_result["message"] = f"I found {doctor_count} {specialty} specialists{location_text} based on your search. Here are the details:"
-                                        else:
-                                            validated_result["message"] = f"I couldn't find any {specialty} specialists{location_text} based on your search. Please try a different search criteria."
-                                    
                                     # Record the execution in history
                                     history.add_tool_execution("search_doctors_dynamic", {
                                         **validated_result,
                                         "doctors": search_result.get("data", {}).get("doctors", [])
                                     })
                                     
-                                    tool_results.append({
-                                        "tool_call_id": tool_call.id,
+                                    # Add tool result immediately after the tool call
+                                    messages.append({
                                         "role": "tool",
-                                        "name": function_name,
-                                        "content": json.dumps(validated_result)
+                                        "content": json.dumps(validated_result),
+                                        "tool_call_id": tool_call.id,
+                                        "name": function_name
                                     })
                                     
                                 except Exception as e:
                                     logger.error(f"❌ Error in doctor search: {str(e)}")
-                                    tool_results.append({
-                                        "tool_call_id": tool_call.id,
+                                    messages.append({
                                         "role": "tool",
-                                        "name": function_name,
                                         "content": json.dumps({
                                             "message": "Error searching for doctors",
                                             "error": str(e)
-                                        })
+                                        }),
+                                        "tool_call_id": tool_call.id,
+                                        "name": function_name
                                     })
                                 
                             elif function_name == "analyze_symptoms":
@@ -1374,151 +1365,124 @@ def chat_engine():
                                 # Call symptom analysis
                                 symptom_result = analyze_symptoms(symptom_description)
                                 
-                                # Log entire symptom_result structure
-                                logger.info(f"DEBUG AGENT: Symptom result type: {type(symptom_result)}")
-                                if isinstance(symptom_result, dict):
-                                    logger.info(f"DEBUG AGENT: Symptom result keys: {list(symptom_result.keys())}")
-                                    for key in symptom_result.keys():
-                                        logger.info(f"DEBUG AGENT: Value type for key '{key}': {type(symptom_result[key])}")
-                                
                                 # Store symptom analysis in history
                                 history.set_symptom_analysis(symptom_result)
-                                logger.info(f"DEBUG AGENT: Stored symptom analysis in session history")
                                 
-                                # Extract specialties for potential doctor search
-                                specialties = []
-                                logger.info(f"DEBUG AGENT: About to extract specialties from symptom_result")
-                                
-                                if symptom_result:
-                                    # Try multiple possible keys where specialties might be stored
-                                    if "specialties" in symptom_result:
-                                        logger.info(f"DEBUG AGENT: Found 'specialties' key in symptom_result")
-                                        specialties = symptom_result.get("specialties", [])
-                                        logger.info(f"DEBUG AGENT: specialties from symptom_result.specialties: {specialties}")
-                                    elif "detailed_analysis" in symptom_result and "specialties" in symptom_result["detailed_analysis"]:
-                                        logger.info(f"DEBUG AGENT: Found 'detailed_analysis.specialties' in symptom_result")
-                                        specialties = symptom_result["detailed_analysis"]["specialties"]
-                                        logger.info(f"DEBUG AGENT: specialties from detailed_analysis.specialties: {specialties}")
-                                    elif "detailed_analysis" in symptom_result and "symptom_analysis" in symptom_result["detailed_analysis"]:
-                                        sa = symptom_result["detailed_analysis"]["symptom_analysis"]
-                                        logger.info(f"DEBUG AGENT: Examining symptom_analysis in detailed_analysis")
-                                        logger.info(f"DEBUG AGENT: symptom_analysis keys: {list(sa.keys()) if isinstance(sa, dict) else 'Not a dict'}")
-                                        
-                                        if "recommended_specialties" in sa:
-                                            logger.info(f"DEBUG AGENT: Found 'recommended_specialties' in symptom_analysis")
-                                            specialties = sa["recommended_specialties"]
-                                            logger.info(f"DEBUG AGENT: specialties from recommended_specialties: {specialties}")
-                                        elif "matched_specialties" in sa:
-                                            logger.info(f"DEBUG AGENT: Found 'matched_specialties' in symptom_analysis")
-                                            specialties = sa["matched_specialties"]
-                                            logger.info(f"DEBUG AGENT: specialties from matched_specialties: {specialties}")
-                                else:
-                                    logger.info(f"DEBUG AGENT: symptom_result is falsy: {symptom_result}")
-                                                
-                                # Log what we found
-                                logger.info(f"DEBUG AGENT: Extracted specialties: {specialties}")
-                                logger.info(f"DEBUG AGENT: Specialties type: {type(specialties)}")
-                                logger.info(f"DEBUG AGENT: Specialties length: {len(specialties) if specialties else 0}")
-                                
-                                # Safely log the top specialty if we have any
-                                if specialties and len(specialties) > 0:
-                                    logger.info(f"DEBUG AGENT: About to access first specialty in list")
-                                    top_specialty = specialties[0]
-                                    logger.info(f"DEBUG AGENT: Successfully accessed first specialty")
-                                    logger.info(f"✅ Top specialty detected: {top_specialty}")
-                                else:
-                                    logger.info("⚠️ No specialties detected in symptom analysis")
-                                
-                                tool_results.append({
+                                # Add tool result immediately after the tool call
+                                messages.append({
+                                    "role": "tool",
+                                    "content": json.dumps(symptom_result),
                                     "tool_call_id": tool_call.id,
-                                    "role": "tool", 
-                                    "name": function_name,
-                                    "content": json.dumps(symptom_result)
+                                    "name": function_name
                                 })
+                                
+                                # If specialties were detected, automatically trigger doctor search
+                                specialties = []
+                                if symptom_result:
+                                    # Check multiple possible locations for specialties
+                                    if "specialties" in symptom_result:
+                                        specialties = symptom_result["specialties"]
+                                    elif "detailed_analysis" in symptom_result:
+                                        da = symptom_result["detailed_analysis"]
+                                        if "specialties" in da:
+                                            specialties = da["specialties"]
+                                        elif "symptom_analysis" in da and "recommended_specialties" in da["symptom_analysis"]:
+                                            specialties = da["symptom_analysis"]["recommended_specialties"]
+                                
+                                if specialties and len(specialties) > 0:
+                                    logger.info(f"✅ Specialties detected: {specialties}")
+                                    top_specialty = specialties[0]
+                                    
+                                    # Extract specialty and subspecialty
+                                    specialty = top_specialty.get('specialty') or top_specialty.get('name')
+                                    subspecialty = top_specialty.get('subspecialty') or top_specialty.get('subspeciality')
+                                    
+                                    if specialty:
+                                        # Create search criteria
+                                        search_criteria = {
+                                            "speciality": specialty,
+                                            "subspeciality": subspecialty if subspecialty else None,
+                                            "user_message": f"find a {specialty} doctor"
+                                        }
+                                        
+                                        # Add coordinates if available
+                                        if lat is not None and long is not None:
+                                            search_criteria["latitude"] = lat
+                                            search_criteria["longitude"] = long
+                                        
+                                        # Call doctor search
+                                        try:
+                                            logger.info(f"🔍 Searching for doctors with criteria: {search_criteria}")
+                                            search_result = dynamic_doctor_search(json.dumps(search_criteria))
+                                            
+                                            # Extract doctor data from search result
+                                            doctor_data = []
+                                            if isinstance(search_result, dict):
+                                                if "response" in search_result and isinstance(search_result["response"], dict):
+                                                    response_data = search_result["response"]
+                                                    if "data" in response_data:
+                                                        data_field = response_data["data"]
+                                                        if isinstance(data_field, dict) and "doctors" in data_field:
+                                                            doctor_data = data_field["doctors"]
+                                                        elif isinstance(data_field, list):
+                                                            doctor_data = data_field
+                                                elif "doctors" in search_result:
+                                                    doctor_data = search_result["doctors"]
+                                                elif "data" in search_result:
+                                                    if isinstance(search_result["data"], dict) and "doctors" in search_result["data"]:
+                                                        doctor_data = search_result["data"]["doctors"]
+                                                    elif isinstance(search_result["data"], list):
+                                                        doctor_data = search_result["data"]
+                                            
+                                            logger.info(f"✅ Found {len(doctor_data)} doctors in search result")
+                                            
+                                            # Create a new tool call for the doctor search
+                                            doctor_search_tool_call = {
+                                                "id": str(uuid.uuid4()),
+                                                "type": "function",
+                                                "function": {
+                                                    "name": "search_doctors_dynamic",
+                                                    "arguments": json.dumps(search_criteria)
+                                                }
+                                            }
+                                            
+                                            # Add the tool call message
+                                            messages.append({
+                                                "role": "assistant",
+                                                "content": None,
+                                                "tool_calls": [doctor_search_tool_call]
+                                            })
+                                            
+                                            # Add the tool result immediately after with the doctor data
+                                            messages.append({
+                                                "role": "tool",
+                                                "content": json.dumps({
+                                                    "message": f"Found {len(doctor_data)} doctors matching your criteria",
+                                                    "data": doctor_data,
+                                                    "is_doctor_search": True
+                                                }),
+                                                "tool_call_id": doctor_search_tool_call["id"],
+                                                "name": "search_doctors_dynamic"
+                                            })
+                                            
+                                            # Record the execution in history with the full data
+                                            history.add_tool_execution("search_doctors_dynamic", {
+                                                "message": f"Found {len(doctor_data)} doctors matching your criteria",
+                                                "data": doctor_data,
+                                                "is_doctor_search": True
+                                            })
+                                            
+                                            logger.info(f"✅ Doctor search completed automatically after symptom analysis")
+                                        except Exception as e:
+                                            logger.error(f"❌ Error in automatic doctor search: {str(e)}")
+                                else:
+                                    logger.info("⚠️ No specialties detected in symptom analysis, skipping doctor search")
                             
                             # Display tool completion footer
                             logger.info("=" * 80)
                         
-                        # Add assistant message with tool calls to history
-                        messages.append(response_message.model_dump())
-                        
-                        # Add tool results to history
-                        for tool_result in tool_results:
-                            messages.append(tool_result)
-                        
                         # Call API again to get final response
                         logger.info("🔄 Calling OpenAI API again to process tool results")
-                        
-                        # Check if we have doctor search results to format
-                        last_doctor_result = history.get_latest_doctor_search()
-                        if last_doctor_result:
-                            # Format doctor data for display while maintaining clear communication
-                            for i, msg in enumerate(messages):
-                                if msg.get("role") == "tool" and "search_doctors_dynamic" in str(msg.get("name", "")):
-                                    # Extract doctor count and specialty
-                                    doctor_count = 0
-                                    specialty = "doctors"
-                                    location = ""
-                                    doctors_list = []
-                                    
-                                    # Extract doctor data and counts
-                                    if isinstance(last_doctor_result, dict):
-                                        if "response" in last_doctor_result and isinstance(last_doctor_result["response"], dict):
-                                            response_data = last_doctor_result["response"]
-                                            if "data" in response_data:
-                                                data_field = response_data.get("data")
-                                                if isinstance(data_field, list):
-                                                    doctors_list = data_field
-                                                    doctor_count = len(doctors_list)
-                                                elif isinstance(data_field, dict) and "doctors" in data_field:
-                                                    doctors_list = data_field["doctors"]
-                                                    doctor_count = len(doctors_list)
-                                        elif "doctors" in last_doctor_result and isinstance(last_doctor_result["doctors"], list):
-                                            doctors_list = last_doctor_result["doctors"]
-                                            doctor_count = len(doctors_list)
-                                    
-                                    # Get specialty if available
-                                    specialty = last_doctor_result.get("specialty", "doctors")
-                                    if not specialty and doctor_count > 0:
-                                        # Try to extract from first doctor
-                                        if doctors_list and len(doctors_list) > 0:
-                                            for field in ["Speciality", "Specialty", "speciality", "specialty"]:
-                                                if doctors_list[0].get(field):
-                                                    specialty = doctors_list[0].get(field)
-                                                    break
-                                    
-                                    # Get location if available
-                                    location = last_doctor_result.get("location", "")
-                                    if not location and doctor_count > 0:
-                                        if doctors_list and len(doctors_list) > 0:
-                                            for field in ["Location", "location", "City", "city"]:
-                                                if doctors_list[0].get(field):
-                                                    location = doctors_list[0].get(field)
-                                                    break
-                                    
-                                    # Create a user-friendly message
-                                    location_text = f" in {location}" if location else ""
-                                    if doctor_count > 0:
-                                        if doctor_count == 1:
-                                            msg_text = f"I found 1 {specialty} specialist{location_text} based on your search. Here are the details:"
-                                        else:
-                                            msg_text = f"I found {doctor_count} {specialty} specialists{location_text} based on your search. Here are the details:"
-                                    else:
-                                        msg_text = f"I couldn't find any {specialty} specialists{location_text} based on your search. Please try a different search criteria."
-                                    
-                                    # Create the response object that includes both the message and the doctor data
-                                    display_response = {
-                                        "message": msg_text,
-                                        "doctor_count": doctor_count,
-                                        "specialty": specialty,
-                                        "location": location,
-                                        "display_results": True,
-                                        "doctors": doctors_list
-                                    }
-                                    
-                                    # Update the tool message content with complete information
-                                    messages[i]["content"] = json.dumps(display_response)
-                                    logger.info(f"🔄 Formatted doctor search result message: {msg_text}")
                         
                         # Add a guidance instruction to the model about showing search results
                         result_guidance = {
@@ -1542,62 +1506,67 @@ def chat_engine():
                         # Add assistant message to history
                         history.add_ai_message(final_message.content)
                         
-                        # Return appropriate response format - Ensure display_results flag is set
-                        # and doctor data is included in the response when search results exist
-                        if last_doctor_result:
-                            try:
-                                # Extract doctor data from the last search result
-                                doctors_data = []
-                                
-                                if isinstance(last_doctor_result, dict):
-                                    if "doctors" in last_doctor_result and isinstance(last_doctor_result["doctors"], list):
-                                        doctors_data = last_doctor_result["doctors"]
-                                    elif "response" in last_doctor_result and isinstance(last_doctor_result["response"], dict):
-                                        response_data = last_doctor_result["response"]
-                                        if "data" in response_data:
-                                            data_field = response_data.get("data")
-                                            if isinstance(data_field, list):
-                                                doctors_data = data_field
-                                            elif isinstance(data_field, dict) and "doctors" in data_field:
-                                                doctors_data = data_field["doctors"]
-                                
-                                # Get the inner response if available
-                                inner_response = last_doctor_result.get("response", {})
-                                doctor_count = len(doctors_data)
-                                
-                                # Create response with display_results flag and doctor data
-                                return {
-                                    "response": {
-                                        "message": final_message.content,
-                                        "patient": inner_response.get("patient") or patient_data or {"session_id": session_id},
-                                        "data": doctors_data,
-                                        "is_doctor_search": True
-                                    },
-                                    "display_results": doctor_count > 0,
-                                    "doctor_count": doctor_count
-                                }
-                            except Exception as e:
-                                logger.error(f"Error formatting doctor search response: {str(e)}", exc_info=True)
-                                # Fallback to a simpler response format
-                                return {
-                                    "response": {
-                                        "message": final_message.content,
-                                        "patient": patient_data or {"session_id": session_id},
-                                        "data": last_doctor_result.get("doctors", []) or [],
-                                        "is_doctor_search": True
-                                    },
-                                    "display_results": True
-                                }
+                        # Get the doctor search result directly from the tool execution
+                        logger.info("🔍 Checking for doctor search results in tool executions")
+                        doctor_search_result = None
+                        for execution in reversed(history.tool_execution_history):
+                            if execution['tool'] == 'search_doctors_dynamic':
+                                doctor_search_result = execution['result']
+                                logger.info(f"Found doctor search result in history: {json.dumps(doctor_search_result)[:200]}")
+                                break
+                        
+                        if doctor_search_result:
+                            # Extract doctor data
+                            doctors_data = []
+                            if isinstance(doctor_search_result, dict):
+                                logger.info(f"Doctor search result keys: {list(doctor_search_result.keys())}")
+                                # First try to get from response.data.doctors
+                                if "response" in doctor_search_result and isinstance(doctor_search_result["response"], dict):
+                                    response_data = doctor_search_result["response"]
+                                    logger.info(f"Response data keys: {list(response_data.keys())}")
+                                    if "data" in response_data:
+                                        data_field = response_data["data"]
+                                        logger.info(f"Data field type: {type(data_field)}")
+                                        if isinstance(data_field, dict) and "doctors" in data_field:
+                                            doctors_data = data_field["doctors"]
+                                            logger.info(f"Found {len(doctors_data)} doctors in response.data.doctors")
+                                        elif isinstance(data_field, list):
+                                            doctors_data = data_field
+                                            logger.info(f"Found {len(doctors_data)} doctors in response.data list")
+                                # Then try direct doctors field
+                                elif "doctors" in doctor_search_result:
+                                    doctors_data = doctor_search_result["doctors"]
+                                    logger.info(f"Found {len(doctors_data)} doctors in direct doctors field")
+                                # Finally try data field
+                                elif "data" in doctor_search_result:
+                                    if isinstance(doctor_search_result["data"], dict) and "doctors" in doctor_search_result["data"]:
+                                        doctors_data = doctor_search_result["data"]["doctors"]
+                                        logger.info(f"Found {len(doctors_data)} doctors in data.doctors")
+                                    elif isinstance(doctor_search_result["data"], list):
+                                        doctors_data = doctor_search_result["data"]
+                                        logger.info(f"Found {len(doctors_data)} doctors in data list")
+                            
+                            logger.info(f"Final response: Found {len(doctors_data)} doctors to include in response")
+                            
+                            # Create response with doctor data
+                            return {
+                                "response": {
+                                    "message": final_message.content,
+                                    "patient": patient_data or {"session_id": session_id},
+                                    "data": doctors_data,
+                                    "is_doctor_search": True
+                                },
+                                "display_results": len(doctors_data) > 0
+                            }
                         else:
                             # No doctor search results - return regular response
-                            final_response = {
+                            return {
                                 "response": {
                                     "message": final_message.content,
                                     "patient": patient_data or {"session_id": session_id},
                                     "data": []
                                 }
                             }
-                            return final_response
                     
                     else:
                         # No tool calls, just return the response content
