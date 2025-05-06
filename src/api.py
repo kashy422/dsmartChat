@@ -191,139 +191,16 @@ async def chat(
 def process_message(message: str, session_id: str) -> dict:
     """Process incoming message by sending it to the agent"""
     try:
-        # Clear any previous session data that might be lingering in thread_local
-        if hasattr(thread_local, 'session_id') and thread_local.session_id != session_id:
-            logger.info(f"Switching from session {thread_local.session_id} to {session_id}")
-            # Log current state before clearing
-            log_thread_local_state(logger, thread_local.session_id)
-            # Clear previous session data
-            for attr in ['symptom_analysis', 'location', 'last_search_results', 'extracted_criteria']:
-                if hasattr(thread_local, attr):
-                    logger.info(f"Clearing previous {attr} data from thread_local")
-                    delattr(thread_local, attr)
-        
-        # Set current session_id
-        thread_local.session_id = session_id
         logger.info(f"Processing message for session {session_id}")
         
-        # Log current thread_local state
-        log_thread_local_state(logger, session_id)
-
-        # Check if we have a stored symptom analysis for this session
-        symptom_analysis = getattr(thread_local, 'symptom_analysis', None)
-        location = getattr(thread_local, 'location', None)
-            
-        # If we have symptom analysis but no location, this might be a location response
-        if symptom_analysis and not location and not any(keyword in message.lower() for keyword in ['pain', 'hurt', 'ache', 'symptoms']):
-            logger.info(f"Detected location response for previous symptom analysis")
-            thread_local.location = message
-            # Now we can search for doctors
-            try:
-                logger.info("DEBUG API: About to access symptom_analysis for doctor search")
-                logger.info(f"DEBUG API: symptom_analysis keys: {list(symptom_analysis.keys()) if isinstance(symptom_analysis, dict) else 'Not a dict'}")
-            
-                # Detailed debugging of the structure
-                if isinstance(symptom_analysis, dict) and "symptom_analysis" in symptom_analysis:
-                    sa = symptom_analysis.get("symptom_analysis", {})
-                    logger.info(f"DEBUG API: symptom_analysis.symptom_analysis keys: {list(sa.keys()) if isinstance(sa, dict) else 'Not a dict'}")
-                    
-                    if "matched_specialties" in sa:
-                        matched = sa["matched_specialties"]
-                        logger.info(f"DEBUG API: matched_specialties type: {type(matched)}")
-                        logger.info(f"DEBUG API: matched_specialties length: {len(matched) if matched else 0}")
-                        if matched and len(matched) > 0:
-                            logger.info(f"DEBUG API: First matched specialty: {matched[0]}")
-                
-                # Safely get specialty information
-                matched_specialties = []
-                if isinstance(symptom_analysis, dict) and "symptom_analysis" in symptom_analysis:
-                    sa = symptom_analysis.get("symptom_analysis", {})
-                    if "matched_specialties" in sa and sa["matched_specialties"]:
-                        matched_specialties = sa["matched_specialties"]
-                    elif "recommended_specialties" in sa and sa["recommended_specialties"]:
-                        matched_specialties = sa["recommended_specialties"]
-                    elif "specialties" in sa and sa["specialties"]:
-                        matched_specialties = sa["specialties"]
-                
-                # Only try to access the first item if the list is not empty
-                specialty_info = None
-                if matched_specialties and len(matched_specialties) > 0:
-                    specialty_info = matched_specialties[0]
-                    logger.info(f"DEBUG API: Using specialty info: {specialty_info}")
-                else:
-                    logger.warning("DEBUG API: No matched specialties found")
-                    # Default to general practitioner if no specialties found
-                    specialty_info = {"specialty": "General Practice", "subspecialty": ""}
-                
-                # Create a string search query that includes location and specialty
-                import json
-                search_data = {
-                    "location": message,
-                    "specialty": specialty_info
-                }
-                # Convert to JSON string for dynamic_doctor_search
-                search_query = json.dumps(search_data)
-                logger.info(f"DEBUG API: Converted search parameters to JSON string: {search_query}")
-                
-                # Call with string parameter as expected by the function definition
-                doctor_search_result = dynamic_doctor_search(search_query)
-                return doctor_search_result
-            except Exception as e:
-                logger.error(f"DEBUG API: Error accessing symptom_analysis: {str(e)}", exc_info=True)
-                # Fallback to a simple location search
-                import json
-                # Create a simple search with just location
-                simple_search = json.dumps({"location": message})
-                logger.info(f"DEBUG API: Falling back to simple location search: {simple_search}")
-                doctor_search_result = dynamic_doctor_search(simple_search)
-                return doctor_search_result
-
         # Forward the message to the agent and get response
         response = engine.invoke(
             {"input": message, "session_id": session_id},
-                config={
-                    "configurable": {"session_id": session_id},
-                    "callbacks": [callBackHandler]
-                }
-            )
-
-        # Log thread_local state after processing
-        logger.info("Thread local state after processing:")
-        log_thread_local_state(logger, session_id)
-            
-        # If the response contains symptom analysis, store it for the session
-        if isinstance(response, dict) and response.get("symptom_analysis"):
-            thread_local.symptom_analysis = response
-            # Return as is without wrapping
-            return response
-        
-        # If we have a response with doctor data, ensure the message doesn't include doctor details
-        if isinstance(response, dict) and isinstance(response.get("response"), dict) and "data" in response["response"]:
-            doctor_data = response["response"]["data"]
-            # If there are doctors in the data array
-            if isinstance(doctor_data, list) and len(doctor_data) > 0:
-                # Extract message details
-                message = response["response"].get("message", "")
-                
-                # Check if message contains detailed doctor information
-                if "Dr." in message or "doctor" in message.lower() or "clinic" in message.lower() or "branch" in message.lower() or "fee" in message.lower():
-                    # Replace with a simple message
-                    doctor_count = len(doctor_data)
-                    simple_message = f"I found {doctor_count} doctors based on your search."
-                    
-                    # Try to extract specialty information
-                    specialty = None
-                    for doc in doctor_data:
-                        if doc.get("Speciality"):
-                            specialty = doc.get("Speciality")
-                            break
-                    
-                    if specialty:
-                        simple_message = f"I found {doctor_count} {specialty} specialists based on your search."
-                    
-                    # Update the message
-                    response["response"]["message"] = simple_message
-                    logger.info(f"Simplified doctor search result message: {simple_message}")
+            config={
+                "configurable": {"session_id": session_id},
+                "callbacks": [callBackHandler]
+            }
+        )
         
         # Return the response without wrapping it in another response object
         return response
