@@ -982,16 +982,22 @@ def chat_engine():
                                 1. Extract any mentioned symptoms, pain, or health concerns
                                 2. Include severity if mentioned (e.g., "severe headache", "mild fever")
                                 3. Include duration if mentioned (e.g., "headache for 2 days")
-                                4. Combine multiple symptoms with "and" (e.g., "fever and cough")
+                                4. Include location of pain if mentioned (e.g., "pain in left knee")
+                                5. Include frequency if mentioned (e.g., "occasional dizziness", "constant nausea")
+                                6. Include any triggers if mentioned (e.g., "headache when standing up")
+                                7. Include any associated symptoms (e.g., "fever with chills and body aches")
+                                8. Combine multiple symptoms with "and" (e.g., "fever and cough")
+                                9. Preserve any medical terminology used by the patient
+                                10. Keep any specific descriptions of symptoms (e.g., "throbbing pain", "sharp pain")
                                 
                                 Return ONLY a JSON object with the fields you find. If a field is not found, omit it.
-                                Example: {{"Name": "John", "Age": 30, "Gender": "Male", "Issue": "severe headache and fever for 2 days"}}
+                                Example: {{"Name": "John", "Age": 30, "Gender": "Male", "Issue": "Severe throbbing headache in temples for 2 days, with sensitivity to light and occasional nausea"}}
                                 """
                                 
                                 extraction = client.chat.completions.create(
                                     model="gpt-4o-mini-2024-07-18",
                                     messages=[
-                                        {"role": "system", "content": "You are a patient information extractor. Extract ONLY the information present in the message. For health issues, be thorough in capturing all symptoms and their details."},
+                                        {"role": "system", "content": "You are a patient information extractor. Extract ONLY the information present in the message. For health issues, be thorough in capturing all symptoms and their details. Always preserve the exact symptom descriptions and medical terminology used by the patient."},
                                         {"role": "user", "content": extraction_prompt}
                                     ]
                                 )
@@ -1008,6 +1014,9 @@ def chat_engine():
                                         issue = " ".join(issue.split())
                                         # Ensure it starts with a capital letter
                                         issue = issue[0].upper() + issue[1:] if issue else None
+                                        # Ensure proper punctuation
+                                        if issue and not issue.endswith(('.', '!', '?')):
+                                            issue = issue + '.'
                                         extracted_data["Issue"] = issue
                                         logger.info(f"✅ Formatted Issue field: {issue}")
                                 
@@ -1427,16 +1436,22 @@ def chat_engine():
                             1. Extract any mentioned symptoms, pain, or health concerns
                             2. Include severity if mentioned (e.g., "severe headache", "mild fever")
                             3. Include duration if mentioned (e.g., "headache for 2 days")
-                            4. Combine multiple symptoms with "and" (e.g., "fever and cough")
+                            4. Include location of pain if mentioned (e.g., "pain in left knee")
+                            5. Include frequency if mentioned (e.g., "occasional dizziness", "constant nausea")
+                            6. Include any triggers if mentioned (e.g., "headache when standing up")
+                            7. Include any associated symptoms (e.g., "fever with chills and body aches")
+                            8. Combine multiple symptoms with "and" (e.g., "fever and cough")
+                            9. Preserve any medical terminology used by the patient
+                            10. Keep any specific descriptions of symptoms (e.g., "throbbing pain", "sharp pain")
                             
                             Return ONLY a JSON object with the fields you find. If a field is not found, omit it.
-                            Example: {{"Name": "John", "Age": 30, "Gender": "Male", "Issue": "severe headache and fever for 2 days"}}
+                            Example: {{"Name": "John", "Age": 30, "Gender": "Male", "Issue": "Severe throbbing headache in temples for 2 days, with sensitivity to light and occasional nausea"}}
                             """
                             
                             extraction = client.chat.completions.create(
                                 model="gpt-4o-mini-2024-07-18",
                                 messages=[
-                                    {"role": "system", "content": "You are a patient information extractor. Extract ONLY the information present in the message. For health issues, be thorough in capturing all symptoms and their details."},
+                                    {"role": "system", "content": "You are a patient information extractor. Extract ONLY the information present in the message. For health issues, be thorough in capturing all symptoms and their details. Always preserve the exact symptom descriptions and medical terminology used by the patient."},
                                     {"role": "user", "content": extraction_prompt}
                                 ]
                             )
@@ -1453,6 +1468,9 @@ def chat_engine():
                                     issue = " ".join(issue.split())
                                     # Ensure it starts with a capital letter
                                     issue = issue[0].upper() + issue[1:] if issue else None
+                                    # Ensure proper punctuation
+                                    if issue and not issue.endswith(('.', '!', '?')):
+                                        issue = issue + '.'
                                     extracted_data["Issue"] = issue
                                     logger.info(f"✅ Formatted Issue field: {issue}")
                             
