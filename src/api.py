@@ -223,9 +223,23 @@ def process_message(message: str, session_id: str, lat: float = None, long: floa
 
     except Exception as e:
         logger.error(f"Error processing message: {str(e)}")
+        try:
+            # Get LLM's response for error handling
+            error_response = client.chat.completions.create(
+                model="gpt-4o-mini-2024-07-18",
+                messages=[
+                    {"role": "system", "content": "You are a medical assistant. Provide a natural error response that matches the conversation style."},
+                    {"role": "user", "content": f"There was an error processing the request. Generate an apologetic response in the same language style as the conversation."}
+                ]
+            )
+            error_message = error_response.choices[0].message.content
+        except Exception as llm_error:
+            logger.error(f"Error getting LLM error response: {str(llm_error)}")
+            error_message = ""  # Empty message will be handled by main LLM
+        
         return {
             "response": {
-                "message": f"I apologize, but I encountered an error processing your request. Could you please try again?",
+                "message": error_message,
                 "patient": {"session_id": session_id},
                 "data": []
             }
