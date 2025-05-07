@@ -498,8 +498,6 @@ def validate_doctor_result(result, patient_data=None, json_requested=True):
     
     # Initialize with defaults
     doctor_count = 0
-    specialty = "doctors"
-    location = ""
     doctors_data = []
     
     # Extract data from various formats
@@ -514,27 +512,11 @@ def validate_doctor_result(result, patient_data=None, json_requested=True):
             data = result["data"]
             doctors_data = data.get("doctors", [])
             doctor_count = data.get("count", len(doctors_data))
-            
-            # Extract specialty and location if available
-            if data.get("criteria", {}):
-                criteria = data["criteria"]
-                if criteria.get("speciality"):
-                    specialty = criteria["speciality"]
-                if criteria.get("location"):
-                    location = criteria["location"]
     
-    # Also check patient data for location if not in search criteria
-    if not location and patient_data and patient_data.get("Location"):
-        location = patient_data["Location"]
-    
-    # Create location text if available
-    location_text = f" in {location}" if location else ""
-    
-    # Create appropriate response based on results
-    if doctor_count > 0:
-        message = f"I found {doctor_count} {specialty} specialists{location_text} that match your criteria."
-    else:
-        message = f"We are currently certifying doctors in our network. Please check back soon for {specialty} specialists{location_text}."
+    # Get the LLM's response from the result
+    message = ""
+    if isinstance(result, dict) and "response" in result and isinstance(result["response"], dict):
+        message = result["response"].get("message", "")
     
     # Ensure patient data is properly formatted
     formatted_patient_data = patient_data or {"session_id": getattr(thread_local, 'session_id', '')}
@@ -602,51 +584,25 @@ def simplify_doctor_message(response_object, logger):
     if not isinstance(doctor_data, list):
         return response_object
     
-    # Get the current message
+    # Get the current message from the LLM
     message = response_dict.get("message", "")
     if not message:
         return response_object
     
-    # Create simplified message
-    doctor_count = len(doctor_data)
-    
-    # Try to extract specialty
-    specialties = set()
-    for doc in doctor_data:
-        # Check variations of spelling for speciality/specialty field
-        specialty = doc.get("Speciality") or doc.get("Specialty") or doc.get("speciality") or doc.get("specialty")
-        if specialty:
-            specialties.add(specialty)
-    
-    # Use first specialty or default to "doctors"
-    specialty_text = "doctors"
-    if specialties:
-        specialty_text = next(iter(specialties))
-        
-    # Try to extract location
-    location = ""
-    if doctor_data and len(doctor_data) > 0:
-        location_value = None
-        for field in ["Location", "location", "City", "city"]:
-            if field in doctor_data[0] and doctor_data[0][field]:
-                location_value = doctor_data[0][field]
-                break
-                
-        if location_value:
-            location = f" in {location_value}"
-    
-    # Create simplified message that explicitly mentions results will be displayed
-    if doctor_count > 0:
-        if doctor_count == 1:
-            simple_message = f"I found 1 {specialty_text} specialist{location} based on your search. Here are the details:"
+    # If the message contains doctor details (starts with \n\n1 or contains "Here are the details:"),
+    # use the LLM's response from the final_message
+    if "\n\n1" in message or "Here are the details:" in message:
+        # Get the LLM's response from the final_message
+        final_message = response_dict.get("final_message", "")
+        if final_message:
+            # Use the LLM's response
+            response_object["response"]["message"] = final_message
+            logger.info(f"🔄 Using LLM's response message: {final_message}")
         else:
-            simple_message = f"I found {doctor_count} {specialty_text} specialists{location} based on your search. Here are the details:"
-    else:
-        simple_message = f"I couldn't find any {specialty_text} specialists{location} based on your search. Please try a different search criteria."
-    
-    # Always update the message when doctor data is present
-    response_object["response"]["message"] = simple_message
-    logger.info(f"🔄 Sanitized doctor search result message: {simple_message}")
+            # If no final_message, use a simple acknowledgment
+            doctor_count = len(doctor_data)
+            response_object["response"]["message"] = f"I've found matching doctors in your area"
+            logger.info(f"🔄 Using simple acknowledgment message")
     
     # Set the data directly in the response
     response_object["response"]["data"] = doctor_data
@@ -1162,14 +1118,9 @@ def chat_engine():
                         # Create response
                         specialty_text = "dentist" if "dentist" in user_message.lower() else "doctor"
                         
-                        # Create response message
-                        if doctor_count > 0:
-                            if doctor_count == 1:
-                                ai_message = f"I found 1 {specialty_text} specialist based on your search. Here are the details:"
-                            else:
-                                ai_message = f"I found {doctor_count} {specialty_text} specialists based on your search. Here are the details:"
-                        else:
-                            ai_message = f"I couldn't find any {specialty_text} specialists based on your search. Please try a different search criteria."
+                        # Get the LLM's response from the validated result
+                        if isinstance(validated_result, dict) and isinstance(validated_result.get("response"), dict):
+                            ai_message = validated_result["response"].get("message", "")
                         
                         # Add the AI response to history
                         history.add_ai_message(ai_message)
@@ -1768,7 +1719,6 @@ def chat_engine():
                                             messages.append({
                                                 "role": "tool",
                                                 "content": json.dumps({
-                                                    "message": f"Found {len(doctor_data)} doctors matching your criteria",
                                                     "data": doctor_data,
                                                     "is_doctor_search": True
                                                 }),
@@ -1778,7 +1728,6 @@ def chat_engine():
                                             
                                             # Record the execution in history with the full data
                                             history.add_tool_execution("search_doctors_dynamic", {
-                                                "message": f"Found {len(doctor_data)} doctors matching your criteria",
                                                 "data": doctor_data,
                                                 "is_doctor_search": True
                                             })

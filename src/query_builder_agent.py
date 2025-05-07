@@ -420,9 +420,23 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
             else:
                 logger.warning(f"DOCTOR SEARCH: Could not find doctors array in result structure")
             
+            # Get LLM's response for the search results
+            try:
+                llm_response = openai_client.chat.completions.create(
+                    model="gpt-4o-mini-2024-07-18",
+                    messages=[
+                        {"role": "system", "content": "You are a medical assistant. Provide a natural response about the doctor search results. Include the number of doctors found and mention that you are showing their details."},
+                        {"role": "user", "content": f"Found {len(data['doctors'])} doctors matching the search criteria. Please provide a natural response about these results."}
+                    ]
+                )
+                message = llm_response.choices[0].message.content
+            except Exception as e:
+                logger.error(f"Error getting LLM response: {str(e)}")
+                message = f"Found {len(data['doctors'])} doctors matching your criteria"
+            
             # Create standardized response format
             search_response = {
-                "message": f"Found {len(data['doctors'])} doctors matching your criteria",
+                "message": message,
                 "patient": {"session_id": getattr(thread_local, 'session_id', '')},
                 "data": data["doctors"],
                 "criteria": final_criteria
@@ -449,14 +463,27 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
         except Exception as query_error:
             logger.error(f"DOCTOR SEARCH: Error executing search query: {str(query_error)}")
             # Return standardized error response
+            try:
+                llm_response = openai_client.chat.completions.create(
+                    model="gpt-4o-mini-2024-07-18",
+                    messages=[
+                        {"role": "system", "content": "You are a medical assistant. Provide a natural response about an error in searching for doctors."},
+                        {"role": "user", "content": "There was an error searching for doctors. Please provide a natural response."}
+                    ]
+                )
+                error_message = llm_response.choices[0].message.content
+            except Exception as e:
+                logger.error(f"Error getting LLM response: {str(e)}")
+                error_message = "I apologize, but I encountered an error searching for doctors. Please try again."
+            
             return {
-            "response": {
-                    "message": "Error searching for doctors, please try again.",
+                "response": {
+                    "message": error_message,
                     "patient": {"session_id": getattr(thread_local, 'session_id', '')},
                     "data": [],
                     "criteria": final_criteria
                 },
-            "performance": {
+                "performance": {
                     "total_time": time.time() - start_time,
                     "processing_time": 0
                 }
@@ -466,9 +493,22 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
         logger.error(f"DOCTOR SEARCH: Unexpected error in unified search: {str(e)}")
         # Create a fallback response
         execution_time = time.time() - start_time
+        try:
+            llm_response = openai_client.chat.completions.create(
+                model="gpt-4o-mini-2024-07-18",
+                messages=[
+                    {"role": "system", "content": "You are a medical assistant. Provide a natural response about being unable to find doctors at the moment."},
+                    {"role": "user", "content": "No doctors were found. Please provide a natural response."}
+                ]
+            )
+            fallback_message = llm_response.choices[0].message.content
+        except Exception as e:
+            logger.error(f"Error getting LLM response: {str(e)}")
+            fallback_message = "I apologize, but I couldn't find any doctors matching your criteria at the moment."
+        
         return {
             "response": {
-                "message": "We are currently certifying doctors in our network. Please check back soon.",
+                "message": fallback_message,
                 "patient": {"session_id": getattr(thread_local, 'session_id', '')},
                 "data": []
             },
