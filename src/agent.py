@@ -195,7 +195,27 @@ logger = setup_detailed_logging()
 SYSTEM_PROMPT = """
 You are an intelligent and empathetic medical assistant for a healthcare application. Your primary role is to help users find doctors and medical facilities near their current location using GPS coordinates.
 
-IMMEDIATE SEARCH TRIGGERS - Take action immediately when user mentions:
+INITIAL INTERACTION:
+1. Always start with a friendly greeting and ask for the user's name if not provided
+2. After getting the name, politely ask for their age
+3. Only after collecting name and age, proceed with their medical concerns or doctor search
+4. Be warm and conversational while gathering this information
+
+Example initial interaction:
+User: "Hi"
+Assistant: "Hello! I'm here to help you with your healthcare needs. May I know your name?"
+User: "I'm Sarah"
+Assistant: "Nice to meet you, Sarah! Could you please tell me your age?"
+User: "I'm 35"
+Assistant: "Thank you, Sarah. How can I help you today?"
+
+Example 2:
+User: "I am looking for dentists"
+Assistant: "To help you, may I know your name and age?"
+User: "I'm Sarah, 35"
+Assistant: "Thank you, Sarah. How can I help you today?"
+
+IMMEDIATE SEARCH TRIGGERS - After collecting name and age, take action immediately when user mentions:
 1. Doctor's name (e.g., "Dr. Ahmed", "Doctor Sarah")
    - ALWAYS use search_doctors_dynamic tool immediately with doctor's name
    - DO NOT ask about symptoms or health concerns
@@ -217,20 +237,17 @@ CRITICAL RULES:
    × NEVER ask about location (we use GPS coordinates automatically)
    × NEVER ask about symptoms
    × NEVER ask about health concerns
-   × NEVER ask for age
 
 2. When user mentions a clinic/hospital:
    ✓ Use facility name for search
    × NEVER ask about location (we use GPS coordinates automatically)
    × NEVER ask about symptoms
    × NEVER ask about health concerns
-   × NEVER ask for age
 
 3. When user mentions a specialty (LIKE DENTIST):
    ✓ Use specialty for search
    × NEVER ask about location (we use GPS coordinates automatically)
    × NEVER ask about symptoms
-   × NEVER ask for age
 
 SYMPTOM FLOW (ONLY if user specifically mentions health issues):
 1. Use analyze_symptoms
@@ -253,6 +270,22 @@ TOOL USAGE:
 
 EXAMPLE RESPONSES:
 
+Initial Interaction Example 1:
+User: "Hi"
+Assistant: "Hello! I'm here to help you with your healthcare needs. May I know your name?"
+User: "I'm John"
+Assistant: "Nice to meet you, John! Could you please tell me your age?"
+User: "I'm 45"
+Assistant: "Thank you, John. How can I help you today?"
+
+Initial Interaction Example 2:
+User: "I am looking for dentists"
+Assistant: "Hello! I'm here to help you with your healthcare needs. May I know your name?"
+User: "I'm John"
+Assistant: "Nice to meet you, John! Could you please tell me your age?"
+User: "I'm 45"
+Assistant: "Thank you, John. How can I help you today?"
+
 For doctor name:
 User: "I'm looking for Dr. Ahmed"
 Assistant: "I'll search for Dr. Ahmed now." [Then show search results or indicate none found]
@@ -270,11 +303,13 @@ User: "I have a severe headache and blurry vision"
 Assistant: "I'll analyze your symptoms to find the right specialist for you." [Then show matched specialists]
 
 IMPORTANT REMINDERS:
+- ALWAYS start by collecting name and age in a friendly manner
 - ALWAYS display search results to users
 - ALWAYS clearly indicate if no results were found
 - NEVER ask unnecessary questions
 - DO NOT ask for location as we use GPS coordinates
 - Keep responses brief and focused
+- Maintain a warm and empathetic tone throughout the conversation
 """
 
 class ChatHistory:
@@ -451,12 +486,8 @@ def validate_doctor_result(result, patient_data=None, json_requested=True):
     Returns:
         dict with keys:
         - message: User-friendly message about the results
-        - doctor_count: Number of doctors found
-        - specialty: Detected specialty
-        - location: Detected location
-        - doctor_details: No longer included to avoid doctor details in message
-        - doctors: List of full doctor data objects from the database
-        - format_type: Always "json" to ensure frontend compatibility
+        - patient: Patient data including age
+        - data: List of doctor data objects
     """
     # Check for nested response objects and unwrap them
     if isinstance(result, dict) and "response" in result and isinstance(result["response"], dict):
@@ -505,11 +536,24 @@ def validate_doctor_result(result, patient_data=None, json_requested=True):
     else:
         message = f"We are currently certifying doctors in our network. Please check back soon for {specialty} specialists{location_text}."
     
+    # Ensure patient data is properly formatted
+    formatted_patient_data = patient_data or {"session_id": getattr(thread_local, 'session_id', '')}
+    if isinstance(formatted_patient_data, dict):
+        # Ensure all fields are present
+        formatted_patient_data = {
+            "Name": formatted_patient_data.get("Name"),
+            "Age": formatted_patient_data.get("Age"),
+            "Gender": formatted_patient_data.get("Gender"),
+            "Location": formatted_patient_data.get("Location"),
+            "Issue": formatted_patient_data.get("Issue"),
+            "session_id": formatted_patient_data.get("session_id")
+        }
+    
     # Return the standardized response format (single level response)
     return {
         "response": {
             "message": message,
-            "patient": patient_data or {"session_id": getattr(thread_local, 'session_id', '')},
+            "patient": formatted_patient_data,
             "data": doctors_data
         }
     }
@@ -606,6 +650,10 @@ def simplify_doctor_message(response_object, logger):
     
     # Set the data directly in the response
     response_object["response"]["data"] = doctor_data
+    
+    # Ensure patient data is preserved
+    if "patient" in response_dict:
+        response_object["response"]["patient"] = response_dict["patient"]
     
     # Ensure doctor_data is included in response for display
     response_object["display_results"] = True
@@ -975,6 +1023,8 @@ def chat_engine():
                                 - Gender
                                 - Location
                                 - Health issues/symptoms (store in Issue field)
+
+                                Extract Gender of the patient based on the Patient's Name provided.
                                 
                                 Message: {user_message}
                                 
@@ -1538,23 +1588,41 @@ def chat_engine():
                             # Process different tool types
                             if function_name == "store_patient_details":
                                 logger.info(f"📋 Storing patient details: {function_args}")
-                                result = store_patient_details(session_id=session_id, **function_args)
-                                
-                                # Update the session history with patient details
-                                history.set_patient_data(function_args)
-                                logger.info(f"✅ Updated session history with patient data: {function_args}")
-                                
-                                # Record this execution in history
-                                history.add_tool_execution("store_patient_details", result)
-                                
-                                # Add tool result immediately after the tool call
-                                messages.append({
-                                    "role": "tool",
-                                    "content": json.dumps(result),
-                                    "tool_call_id": tool_call.id,
-                                    "name": function_name
-                                })
-                                
+                                try:
+                                    result = store_patient_details(session_id=session_id, **function_args)
+                                    
+                                    # Update the session history with patient details
+                                    history.set_patient_data(function_args)
+                                    logger.info(f"✅ Updated session history with patient data: {function_args}")
+                                    
+                                    # Record this execution in history
+                                    history.add_tool_execution("store_patient_details", result)
+                                    
+                                    # Add tool result immediately after the tool call
+                                    messages.append({
+                                        "role": "tool",
+                                        "content": json.dumps(result),
+                                        "tool_call_id": tool_call.id,
+                                        "name": function_name
+                                    })
+                                except Exception as e:
+                                    logger.error(f"❌ Error in store_patient_details: {str(e)}")
+                                    # Add error response to maintain message flow
+                                    error_result = {
+                                        "Name": None,
+                                        "Age": None,
+                                        "Gender": None,
+                                        "Location": None,
+                                        "Issue": None,
+                                        "session_id": session_id,
+                                        "error": str(e)
+                                    }
+                                    messages.append({
+                                        "role": "tool",
+                                        "content": json.dumps(error_result),
+                                        "tool_call_id": tool_call.id,
+                                        "name": function_name
+                                    })
                             elif function_name == "search_doctors_dynamic":
                                 logger.info(f"🔍 Searching for doctors: {function_args}")
                                 search_query = function_args.get('user_message', '')
