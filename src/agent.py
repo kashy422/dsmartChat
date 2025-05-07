@@ -1128,10 +1128,10 @@ def chat_engine():
                         # Store the search result
                         history.add_tool_execution("search_doctors_dynamic", validated_result)
                         
-                        # Create final response object
+                        # Create final response object with the LLM response from query_builder_agent
                         final_response = {
                             "response": {
-                                "message": ai_message,
+                                "message": ai_message,  # Use the LLM response directly from query_builder_agent
                                 "patient": history.get_patient_data() or {"session_id": session_id},
                                 "data": doctor_data,
                                 "is_doctor_search": True
@@ -1608,6 +1608,30 @@ def chat_engine():
                                         "name": function_name
                                     })
                                     
+                                    # Get the LLM's response from the validated result
+                                    if isinstance(validated_result, dict) and isinstance(validated_result.get("response"), dict):
+                                        ai_message = validated_result["response"].get("message", "")
+                                        
+                                        # Add the AI response to history
+                                        history.add_ai_message(ai_message)
+                                        
+                                        # Create final response object with the LLM response from query_builder_agent
+                                        final_response = {
+                                            "response": {
+                                                "message": ai_message,  # Use the LLM response directly from query_builder_agent
+                                                "patient": history.get_patient_data() or {"session_id": session_id},
+                                                "data": search_result.get("data", {}).get("doctors", []),
+                                                "is_doctor_search": True
+                                            },
+                                            "display_results": len(search_result.get("data", {}).get("doctors", [])) > 0,
+                                            "doctor_count": len(search_result.get("data", {}).get("doctors", []))
+                                        }
+                                        
+                                        # IMPORTANT: Clear symptom_analysis from thread_local after doctor search
+                                        clear_symptom_analysis("after doctor search", session_id)
+                                        
+                                        return final_response
+                                    
                                 except Exception as e:
                                     logger.error(f"❌ Error in doctor search: {str(e)}")
                                     messages.append({
@@ -1619,7 +1643,6 @@ def chat_engine():
                                         "tool_call_id": tool_call.id,
                                         "name": function_name
                                     })
-                                
                             elif function_name == "analyze_symptoms":
                                 logger.info(f"🩺 Analyzing symptoms: {function_args}")
                                 symptom_description = function_args.get('symptom_description', '')

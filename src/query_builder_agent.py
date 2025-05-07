@@ -426,20 +426,29 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
                     model="gpt-4o-mini-2024-07-18",
                     messages=[
                         {"role": "system", "content": "You are a medical assistant. Provide a natural response about the doctor search results. Include the number of doctors found and mention that you are showing their details."},
-                        {"role": "user", "content": f"Found {len(data['doctors'])} doctors matching the search criteria. Please provide a natural response about these results."}
+                        {"role": "user", "content": f"Found {len(data['doctors'])} doctors matching the search criteria. Please provide a natural response about these results. If no doctors were found, clearly state that and suggest trying different search terms."}
                     ]
                 )
                 message = llm_response.choices[0].message.content
             except Exception as e:
                 logger.error(f"Error getting LLM response: {str(e)}")
-                message = f"Found {len(data['doctors'])} doctors matching your criteria"
+                if len(data['doctors']) > 0:
+                    message = f"I've found {len(data['doctors'])} doctors matching your criteria"
+                else:
+                    message = "I couldn't find any doctors matching your search criteria. Would you like to try searching with different terms?"
             
             # Create standardized response format
             search_response = {
-                "message": message,
-                "patient": {"session_id": getattr(thread_local, 'session_id', '')},
-                "data": data["doctors"],
-                "criteria": final_criteria
+                "response": {
+                    "message": message,
+                    "patient": {"session_id": getattr(thread_local, 'session_id', '')},
+                    "data": data["doctors"],
+                    "criteria": final_criteria
+                },
+                "performance": {
+                    "total_time": time.time() - start_time,
+                    "processing_time": 0
+                }
             }
             
             # Track processing time
@@ -498,7 +507,7 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
                 model="gpt-4o-mini-2024-07-18",
                 messages=[
                     {"role": "system", "content": "You are a medical assistant. Provide a natural response about being unable to find doctors at the moment."},
-                    {"role": "user", "content": "No doctors were found. Please provide a natural response."}
+                    {"role": "user", "content": "No doctors were found. Please provide a natural response saying something like we are trying to certify more doctors in your area please check back soon."}
                 ]
             )
             fallback_message = llm_response.choices[0].message.content
