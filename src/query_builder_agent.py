@@ -418,33 +418,19 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
                 logger.info(f"DOCTOR SEARCH: Found {len(doctors)} doctors in result['doctors']")
                 data["doctors"] = doctors
             else:
-                logger.warning(f"DOCTOR SEARCH: Could not find doctors array in result structure")
-            
-            # Get LLM's response for the search results
-            try:
-                llm_response = openai_client.chat.completions.create(
-                    model="gpt-4o-mini-2024-07-18",
-                    messages=[
-                        {"role": "system", "content": "You are a medical assistant. Provide a natural response about the doctor search results. Include the number of doctors found and mention that you are showing their details."},
-                        {"role": "user", "content": f"Found {len(data['doctors'])} doctors matching the search criteria. Please provide a natural response about these results. If no doctors were found, clearly state that and suggest trying different search terms."}
-                    ]
-                )
-                message = llm_response.choices[0].message.content
-            except Exception as e:
-                logger.error(f"Error getting LLM response: {str(e)}")
-                if len(data['doctors']) > 0:
-                    message = f"I've found {len(data['doctors'])} doctors matching your criteria"
+                # Check if the result itself is a list of doctors
+                if isinstance(result, list):
+                    logger.info(f"DOCTOR SEARCH: Found {len(result)} doctors in result list")
+                    data["doctors"] = result
                 else:
-                    message = "I couldn't find any doctors matching your search criteria. Would you like to try searching with different terms?"
+                    logger.warning(f"DOCTOR SEARCH: Could not find doctors array in result structure. Result type: {type(result)}")
+                    logger.warning(f"DOCTOR SEARCH: Result keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
             
-            # Create standardized response format
+            # Create standardized response format with just the data
             search_response = {
-                "response": {
-                    "message": message,
-                    "patient": {"session_id": getattr(thread_local, 'session_id', '')},
-                    "data": data["doctors"],
-                    "criteria": final_criteria
-                },
+                "data": data["doctors"],  # Just return the doctors array
+                "criteria": final_criteria,
+                "doctor_count": len(data["doctors"]),
                 "performance": {
                     "total_time": time.time() - start_time,
                     "processing_time": 0
@@ -456,18 +442,15 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
             execution_time = end_time - start_time
             
             # Add performance metrics
-            search_response["processing_time"] = execution_time
-            
-            # Create the standard response format
-            final_result = {
-                "response": search_response,
-                "performance": {
-                    "total_time": execution_time,
-                    "processing_time": execution_time
-                }
+            search_response["performance"] = {
+                "total_time": execution_time,
+                "processing_time": execution_time
             }
             
-            return final_result
+            # Log the final result structure
+            logger.info(f"DOCTOR SEARCH: Final result structure: {list(search_response.keys())}")
+            
+            return search_response  # Return just the data and let main LLM handle the response message
         
         except Exception as query_error:
             logger.error(f"DOCTOR SEARCH: Error executing search query: {str(query_error)}")

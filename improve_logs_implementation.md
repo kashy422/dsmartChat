@@ -72,3 +72,16 @@ With the improved logger, a typical interaction will produce logs like:
 - Visual distinction between different components (symptom analysis, query building, database)
 - Timestamp on each log line for performance analysis
 - Colored output for better readability in terminal 
+
+system_prompt = """You are a medical assistant. Your task is to provide a response about doctor search results.
+IMPORTANT: Analyze the conversation history carefully to match the EXACT language style, tone, and writing pattern of the user and the main assistant.
+Pay special attention to:
+1. The language being used (English, Arabic, Urdu, etc.)
+2. The writing style (formal/informal, technical/casual)
+3. The tone of the conversation
+4. Any specific patterns or phrases used
+5. The level of formality
+``` 
+
+conversation_history = getattr(thread_local, 'conversation_history', [])
+main_llm_history = getattr(thread_local, 'main_llm_history', []) 

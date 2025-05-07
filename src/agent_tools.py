@@ -396,7 +396,7 @@ def ensure_proper_doctor_search_format(result: Dict[str, Any], query: str) -> Di
     
     # Extract data for standardized format
     doctors = []
-    message = ""
+    message = None
     patient_info = {"session_id": getattr(thread_local, 'session_id', '')}
     
     # Handle the specific format returned by unified_doctor_search_tool
@@ -428,8 +428,12 @@ def ensure_proper_doctor_search_format(result: Dict[str, Any], query: str) -> Di
                 "response": {
                     "message": message,
                     "patient": patient_info,
-                    "data": doctors
-                }
+                    "data": doctors,
+                    "doctor_count": len(doctors),
+                    "is_doctor_search": True
+                },
+                "display_results": True,
+                "doctor_count": len(doctors)
             }
     
     # Extract doctor data from various possible locations
@@ -449,9 +453,9 @@ def ensure_proper_doctor_search_format(result: Dict[str, Any], query: str) -> Di
         if "message" in result:
             message = result["message"]
         elif "status" in result and result["status"] == "not_found":
-            message = "We are currently certifying doctors in our network. Please check back soon."
+            message = None
         else:
-            message = f"I found {len(doctors)} doctors based on your search."
+            message = None
         
         # Get patient info if available
         if "patient" in result:
@@ -464,8 +468,12 @@ def ensure_proper_doctor_search_format(result: Dict[str, Any], query: str) -> Di
         "response": {
             "message": message,
             "patient": patient_info,
-            "data": doctors
-        }
+            "data": doctors,
+            "doctor_count": len(doctors),
+            "is_doctor_search": True
+        },
+        "display_results": True,
+        "doctor_count": len(doctors)
     }
     
     logger.info(f"DEBUG FORMAT: Created standardized result with {len(doctors)} doctors")
