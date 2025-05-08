@@ -426,15 +426,15 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
                     logger.warning(f"DOCTOR SEARCH: Could not find doctors array in result structure. Result type: {type(result)}")
                     logger.warning(f"DOCTOR SEARCH: Result keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
             
-            # Create standardized response format with just the data
+            # Create standardized response format
             search_response = {
-                "data": data["doctors"],  # Just return the doctors array
-                "criteria": final_criteria,
-                "doctor_count": len(data["doctors"]),
-                "performance": {
-                    "total_time": time.time() - start_time,
-                    "processing_time": 0
-                }
+                "response": {
+                    "data": data["doctors"],  # The doctors array
+                    "doctor_count": len(data["doctors"]),
+                    "is_doctor_search": True
+                },
+                "display_results": len(data["doctors"]) > 0,
+                "doctor_count": len(data["doctors"])
             }
             
             # Track processing time
@@ -449,8 +449,9 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
             
             # Log the final result structure
             logger.info(f"DOCTOR SEARCH: Final result structure: {list(search_response.keys())}")
+            logger.info(f"DOCTOR SEARCH: Found {len(data['doctors'])} doctors")
             
-            return search_response  # Return just the data and let main LLM handle the response message
+            return search_response
         
         except Exception as query_error:
             logger.error(f"DOCTOR SEARCH: Error executing search query: {str(query_error)}")
