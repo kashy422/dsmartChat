@@ -18,7 +18,7 @@ from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_openai import ChatOpenAI
 from openai import OpenAI
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple, Union
 import time
 import re
 import logging
@@ -29,6 +29,8 @@ from pprint import pprint
 import threading
 from decimal import Decimal
 import datetime
+from pydantic import BaseModel
+from sqlalchemy import text
 
 from .agent_tools import (
     store_patient_details_tool,
@@ -51,6 +53,19 @@ from .query_builder_agent import (
     extract_search_criteria_tool,
     extract_search_criteria_from_message
 )
+from .db import DB
+
+# Initialize thread_local storage
+thread_local = threading.local()
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+# Initialize the database connection
+db = DB()
+
+# Initialize OpenAI client
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY"))
 
 # Helper function to clear symptom analysis data
 def clear_symptom_analysis(reason="", session_id=None):
@@ -517,27 +532,73 @@ def validate_doctor_result(result, patient_data=None, json_requested=True):
     message = ""
     if isinstance(result, dict) and "response" in result and isinstance(result["response"], dict):
         message = result["response"].get("message", "")
+        
+        # Get the original message to detect language
+        original_message = ""
+        if isinstance(result, dict):
+            if "criteria" in result and isinstance(result["criteria"], dict):
+                original_message = result["criteria"].get("original_message", "")
+            elif "response" in result and isinstance(result["response"], dict):
+                original_message = result["response"].get("original_message", "")
+        
+        # Handle special messages using the main chat engine's context
+        if message in ["NO_SPECIALTY_FOUND", "NO_DOCTORS_FOUND", "SEARCH_ERROR", "UNEXPECTED_ERROR"]:
+            try:
+                # Get the current session history
+                session_id = getattr(thread_local, 'session_id', '')
+                history = get_session_history(session_id)
+                
+                # Create a context-aware prompt based on the error type
+                error_context = {
+                    "NO_SPECIALTY_FOUND": "The user has searched for a medical specialty that we don't have available yet. Please acknowledge their search and explain we are actively expanding our network of doctors and specialists.",
+                    "NO_DOCTORS_FOUND": "The user's search for doctors in their specified specialty and location returned no results. Please acknowledge their search and explain we are actively expanding our network of doctors in their area.",
+                    "SEARCH_ERROR": "There was an error searching for doctors. Please acknowledge the issue and suggest what they can do next.",
+                    "UNEXPECTED_ERROR": "An unexpected error occurred. Please acknowledge the issue and suggest what they can do next."
+                }
+                
+                # Get the current messages from history, filtering out tool calls and null content
+                messages = []
+                for msg in history.messages:
+                    if msg['type'] == 'human' and msg.get('content'):
+                        messages.append({"role": "user", "content": msg['content']})
+                    elif msg['type'] == 'ai' and msg.get('content'):
+                        messages.append({"role": "assistant", "content": msg['content']})
+                
+                # If we have no valid messages, create a basic context
+                if not messages:
+                    messages = [
+                        {"role": "system", "content": "You are a medical assistant. Provide responses in a professional but warm tone."},
+                        {"role": "user", "content": original_message or "Hello"}
+                    ]
+                
+                # Add the error context as a new user message
+                messages.append({"role": "user", "content": error_context[message]})
+                
+                # Get response from the main chat engine
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini-2024-07-18",
+                    messages=messages
+                )
+                message = response.choices[0].message.content
+                
+            except Exception as e:
+                logger.error(f"Error generating response from chat history: {str(e)}")
+                # Fallback to a simple message if there's an error
+                message = "I apologize, but I couldn't find any matching results. Please try a different search term or location."
     
     # Ensure patient data is properly formatted
     formatted_patient_data = patient_data or {"session_id": getattr(thread_local, 'session_id', '')}
-    if isinstance(formatted_patient_data, dict):
-        # Ensure all fields are present
-        formatted_patient_data = {
-            "Name": formatted_patient_data.get("Name"),
-            "Age": formatted_patient_data.get("Age"),
-            "Gender": formatted_patient_data.get("Gender"),
-            "Location": formatted_patient_data.get("Location"),
-            "Issue": formatted_patient_data.get("Issue"),
-            "session_id": formatted_patient_data.get("session_id")
-        }
     
-    # Return the standardized response format (single level response)
+    # Return the validated result
     return {
         "response": {
             "message": message,
             "patient": formatted_patient_data,
-            "data": doctors_data
-        }
+            "data": doctors_data,
+            "is_doctor_search": True
+        },
+        "display_results": doctor_count > 0,
+        "doctor_count": doctor_count
     }
 
 def simplify_doctor_message(response_object, logger):
@@ -1310,8 +1371,8 @@ def chat_engine():
                                 response = client.chat.completions.create(
                                     model="gpt-4o-mini-2024-07-18",
                                     messages=[
-                                        {"role": "system", "content": "You are a medical assistant. When no matching specialty is found in our database, provide a two-part response: First, acknowledge the symptoms and suggest appropriate medical specialties they should consult. Second, explain that we are currently certifying doctors and expanding our network. Keep it professional, empathetic, and reassuring."},
-                                        {"role": "user", "content": "The user has described symptoms that require medical attention, but we don't have matching specialties in our database yet. First, acknowledge their symptoms and suggest which type of specialist they should consult (like cardiologist for heart issues, pulmonologist for breathing problems, etc.). Then, explain that we are currently certifying doctors and expanding our network to include these specialties. Keep the tone professional but warm and reassuring."}
+                                        {"role": "system", "content": "You are a medical assistant. When no matching specialty is found in our database, provide a two-part response: First, acknowledge the symptoms and suggest appropriate medical specialties they should consult. Second, explain that we are actively expanding our network of doctors and specialists. Keep it professional, empathetic, and reassuring."},
+                                        {"role": "user", "content": "The user has described symptoms that require medical attention, but we don't have matching specialties in our database yet. First, acknowledge their symptoms and suggest which type of specialist they should consult (like cardiologist for heart issues, pulmonologist for breathing problems, etc.). Then, explain that we are actively expanding our network of doctors and specialists to include these specialties. Keep the tone professional but warm and reassuring."}
                                     ]
                                 )
                                 message = response.choices[0].message.content

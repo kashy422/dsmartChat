@@ -392,23 +392,9 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
             # Check if WHERE clause is empty
             if not params['@DynamicWhereClause'].strip():
                 logger.warning("Empty WHERE clause detected, skipping stored procedure execution")
-                try:
-                    # Generate a professional message about certifying doctors
-                    llm_response = openai_client.chat.completions.create(
-                        model="gpt-4o-mini-2024-07-18",
-                        messages=[
-                            {"role": "system", "content": "You are a medical assistant. When no matching specialty is found, provide a brief response in the user's language style (Arabic, English, Roman Urdu, or Urdu). First, acknowledge their search. Then, explain we are working to add more doctors. Keep it professional but warm. Never mention database or technical terms. Match their exact language style - if they use Urdu script, respond in Urdu script; if they use Roman Urdu, respond in Roman Urdu; if they use Arabic, respond in Arabic; if they use English, respond in English."},
-                            {"role": "user", "content": "The user has searched for a medical specialty that we don't have available yet. Please provide a brief response in their language style (matching their Arabic/English/Roman Urdu/Urdu style) that acknowledges their search and explains we are working to add more doctors. Keep it professional but warm. Never mention database or technical terms. Match their exact language style - if they use Urdu script, respond in Urdu script; if they use Roman Urdu, respond in Roman Urdu; if they use Arabic, respond in Arabic; if they use English, respond in English."}
-                        ]
-                    )
-                    message = llm_response.choices[0].message.content
-                except Exception as e:
-                    logger.error(f"Error getting LLM response: {str(e)}")
-                    message = "I understand you're looking for medical care. Based on your symptoms, I recommend consulting with a specialist in that field. We are currently in the process of certifying doctors and expanding our network to include more specialists. Would you like me to help you find a doctor in a different specialty that we currently have available?"
-                
                 return {
                     "response": {
-                        "message": message,
+                        "message": "NO_SPECIALTY_FOUND",
                         "patient": {"session_id": getattr(thread_local, 'session_id', '')},
                         "data": {"doctors": []},
                         "is_doctor_search": True
@@ -468,25 +454,19 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
                 "doctor_count": len(data["doctors"])
             }
             
-            # If no doctors found, generate a professional message about certifying doctors
+            # If no doctors found, return structured response
             if len(data["doctors"]) == 0:
                 logger.warning("No doctors found in search results")
-                try:
-                    # Generate a professional message about certifying doctors
-                    llm_response = openai_client.chat.completions.create(
-                        model="gpt-4o-mini-2024-07-18",
-                        messages=[
-                            {"role": "system", "content": "You are a medical assistant. When no matching specialty is found, provide a brief response in the user's language style (Arabic, English, Roman Urdu, or Urdu). First, acknowledge their search. Then, explain we are working to add more doctors. Keep it professional but warm. Never mention database or technical terms. Match their exact language style - if they use Urdu script, respond in Urdu script; if they use Roman Urdu, respond in Roman Urdu; if they use Arabic, respond in Arabic; if they use English, respond in English."},
-                            {"role": "user", "content": "The user has searched for a medical specialty that we don't have available yet. Please provide a brief response in their language style (matching their Arabic/English/Roman Urdu/Urdu style) that acknowledges their search and explains we are working to add more doctors. Keep it professional but warm. Never mention database or technical terms. Match their exact language style - if they use Urdu script, respond in Urdu script; if they use Roman Urdu, respond in Roman Urdu; if they use Arabic, respond in Arabic; if they use English, respond in English."}
-                        ]
-                    )
-                    message = llm_response.choices[0].message.content
-                except Exception as e:
-                    logger.error(f"Error getting LLM response: {str(e)}")
-                    message = "I understand you're looking for medical care. Based on your symptoms, I recommend consulting with a specialist in that field. We are currently in the process of certifying doctors and expanding our network to include more specialists. Would you like me to help you find a doctor in a different specialty that we currently have available?"
-                
-                search_response["response"]["message"] = message
-                search_response["display_results"] = False
+                return {
+                    "response": {
+                        "message": "NO_DOCTORS_FOUND",
+                        "patient": {"session_id": getattr(thread_local, 'session_id', '')},
+                        "data": {"doctors": []},
+                        "is_doctor_search": True
+                    },
+                    "display_results": False,
+                    "doctor_count": 0
+                }
             
             # Track processing time
             end_time = time.time()
@@ -507,22 +487,9 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
         except Exception as query_error:
             logger.error(f"DOCTOR SEARCH: Error executing search query: {str(query_error)}")
             # Return standardized error response
-            try:
-                llm_response = openai_client.chat.completions.create(
-                    model="gpt-4o-mini-2024-07-18",
-                    messages=[
-                        {"role": "system", "content": "You are a medical assistant. When an error occurs in searching for doctors, provide a natural response that acknowledges the issue and offers alternatives."},
-                        {"role": "user", "content": "There was an error searching for doctors. Please provide a natural response that acknowledges the issue and suggests what the user can do next."}
-                    ]
-                )
-                error_message = llm_response.choices[0].message.content
-            except Exception as e:
-                logger.error(f"Error getting LLM response: {str(e)}")
-                error_message = "I apologize, but I encountered an error searching for doctors. Would you like to try searching with different criteria or would you prefer to describe your symptoms so I can help find the right specialist?"
-            
             return {
                 "response": {
-                    "message": error_message,
+                    "message": "SEARCH_ERROR",
                     "patient": {"session_id": getattr(thread_local, 'session_id', '')},
                     "data": [],
                     "criteria": final_criteria
@@ -537,22 +504,9 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
         logger.error(f"DOCTOR SEARCH: Unexpected error in unified search: {str(e)}")
         # Create a fallback response
         execution_time = time.time() - start_time
-        try:
-            llm_response = openai_client.chat.completions.create(
-                model="gpt-4o-mini-2024-07-18",
-                messages=[
-                    {"role": "system", "content": "You are a medical assistant. When no doctors are found, provide a natural response that acknowledges the user's needs and offers alternatives."},
-                    {"role": "user", "content": "No doctors were found. Please provide a natural response that acknowledges the user's needs and suggests what they can do next."}
-                ]
-            )
-            fallback_message = llm_response.choices[0].message.content
-        except Exception as e:
-            logger.error(f"Error getting LLM response: {str(e)}")
-            fallback_message = "I understand you're looking for medical care. While I couldn't find any doctors matching your specific criteria at the moment, I'd be happy to help you search with different criteria or explore other specialties. What would you prefer to do?"
-        
         return {
             "response": {
-                "message": fallback_message,
+                "message": "UNEXPECTED_ERROR",
                 "patient": {"session_id": getattr(thread_local, 'session_id', '')},
                 "data": []
             },
