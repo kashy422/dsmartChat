@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any, Optional, Union
 from datetime import datetime
 from langchain_core.callbacks import BaseCallbackHandler
 import json 
@@ -24,23 +24,56 @@ thread_local = threading.local()
 
 def store_patient_details(
     Name: Optional[str] = None,
-    Age: Optional[int] = None,
+    Age: Optional[Union[int, str]] = None,
     Gender: Optional[str] = None,
     Location: Optional[str] = None,
     Issue: Optional[str] = None,
     session_id: Optional[str] = None  # Add session_id as an argument
 ) -> dict:
     """Store the information of a patient with default values for missing fields."""
-    patient_info = {
-        "Name": Name or None,
-        "Age": Age or None,
-        "Gender": Gender or None,
-        "Location": Location or None,
-        "Issue": Issue or None,
-        "session_id": session_id  # Include session_id in the output
-    }
-    print("Storing patient info:", patient_info)  # Debugging statement
-    return patient_info  # Return a dictionary
+    try:
+        # Convert age to integer if it's a string
+        if isinstance(Age, str):
+            try:
+                # Remove any non-numeric characters
+                age_str = ''.join(filter(str.isdigit, Age))
+                if age_str:
+                    Age = int(age_str)
+                else:
+                    Age = None
+            except (ValueError, TypeError):
+                Age = None
+        
+        # Create patient info dictionary with explicit None values
+        patient_info = {
+            "Name": Name if Name is not None else None,
+            "Age": Age if Age is not None else None,
+            "Gender": Gender if Gender is not None else None,
+            "Location": Location if Location is not None else None,
+            "Issue": Issue if Issue is not None else None,
+            "session_id": session_id if session_id is not None else None
+        }
+        
+        # Ensure all values are JSON serializable
+        for key, value in patient_info.items():
+            if value is not None and not isinstance(value, (str, int, float, bool)):
+                patient_info[key] = str(value)
+        
+        logger.info(f"Storing patient info: {patient_info}")  # Debugging statement
+        return patient_info  # Return a dictionary
+        
+    except Exception as e:
+        logger.error(f"Error in store_patient_details: {str(e)}")
+        # Return a safe default response
+        return {
+            "Name": None,
+            "Age": None,
+            "Gender": None,
+            "Location": None,
+            "Issue": None,
+            "session_id": session_id,
+            "error": str(e)
+        }
 
 
 # Simple language detection function
