@@ -10,6 +10,7 @@ import threading
 import time
 from openai import OpenAI
 import uuid
+import json
 
 # Initialize thread_local storage
 thread_local = threading.local()
@@ -342,7 +343,7 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
                         if "subspecialty" in normalized_result:
                             final_criteria['subspeciality'] = normalized_result["subspecialty"]
                         elif 'subspecialty' in specialty_obj:
-                            final_criteria['subspeciality'] = specialty_obj['subspecialty']
+                            final_criteria['subspecialty'] = specialty_obj['subspecialty']
                     
                     # Remove the original field to avoid confusion
                     if 'specialty' in final_criteria:
@@ -387,6 +388,20 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
         # Build and execute the query
         try:
             proc_name, params = build_query(SearchCriteria(**final_criteria))
+            
+            # Check if WHERE clause is empty
+            if not params['@DynamicWhereClause'].strip():
+                logger.warning("Empty WHERE clause detected, skipping stored procedure execution")
+                return {
+                    "response": {
+                        "message": "NO_SPECIALTY_FOUND",
+                        "patient": {"session_id": getattr(thread_local, 'session_id', '')},
+                        "data": {"doctors": []},
+                        "is_doctor_search": True
+                    },
+                    "display_results": False,
+                    "doctor_count": 0
+                }
             
             logger.info(f"DOCTOR SEARCH: Executing stored procedure: {proc_name}")
             result = db.execute_stored_procedure(proc_name, params)
@@ -437,6 +452,20 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
                 "doctor_count": len(data["doctors"])
             }
             
+            # If no doctors found, return structured response
+            if len(data["doctors"]) == 0:
+                logger.warning("No doctors found in search results")
+                return {
+                    "response": {
+                        "message": "NO_DOCTORS_FOUND",
+                        "patient": {"session_id": getattr(thread_local, 'session_id', '')},
+                        "data": {"doctors": []},
+                        "is_doctor_search": True
+                    },
+                    "display_results": False,
+                    "doctor_count": 0
+                }
+            
             # Track processing time
             end_time = time.time()
             execution_time = end_time - start_time
@@ -456,22 +485,9 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
         except Exception as query_error:
             logger.error(f"DOCTOR SEARCH: Error executing search query: {str(query_error)}")
             # Return standardized error response
-            try:
-                llm_response = openai_client.chat.completions.create(
-                    model="gpt-4o-mini-2024-07-18",
-                    messages=[
-                        {"role": "system", "content": "You are a medical assistant. Provide a natural response about an error in searching for doctors."},
-                        {"role": "user", "content": "There was an error searching for doctors. Please provide a natural response."}
-                    ]
-                )
-                error_message = llm_response.choices[0].message.content
-            except Exception as e:
-                logger.error(f"Error getting LLM response: {str(e)}")
-                error_message = "I apologize, but I encountered an error searching for doctors. Please try again."
-            
             return {
                 "response": {
-                    "message": error_message,
+                    "message": "SEARCH_ERROR",
                     "patient": {"session_id": getattr(thread_local, 'session_id', '')},
                     "data": [],
                     "criteria": final_criteria
@@ -486,22 +502,9 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
         logger.error(f"DOCTOR SEARCH: Unexpected error in unified search: {str(e)}")
         # Create a fallback response
         execution_time = time.time() - start_time
-        try:
-            llm_response = openai_client.chat.completions.create(
-                model="gpt-4o-mini-2024-07-18",
-                messages=[
-                    {"role": "system", "content": "You are a medical assistant. Provide a natural response about being unable to find doctors at the moment."},
-                    {"role": "user", "content": "No doctors were found. Please provide a natural response saying something like we are trying to certify more doctors in your area please check back soon."}
-                ]
-            )
-            fallback_message = llm_response.choices[0].message.content
-        except Exception as e:
-            logger.error(f"Error getting LLM response: {str(e)}")
-            fallback_message = "I apologize, but I couldn't find any doctors matching your criteria at the moment."
-        
         return {
             "response": {
-                "message": fallback_message,
+                "message": "UNEXPECTED_ERROR",
                 "patient": {"session_id": getattr(thread_local, 'session_id', '')},
                 "data": []
             },
@@ -525,6 +528,7 @@ def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
     try:
         # Prepare prompt for criteria extraction
         system_prompt = """Extract search criteria from the user's message into a structured format. Focus on:
+        - Specialty/type of doctor (e.g., dentist, cardiologist, pediatrician)
         - Price range (min and max in SAR) in western numbers.
         - Rating requirements (minimum rating out of 5) in western numbers.
         - Experience requirements (minimum years) in western numbers.
@@ -539,8 +543,14 @@ def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
         - "women doctors" or "men doctors"
         - "show me females" or "show me males"
         
+        For specialty, look for:
+        - Direct mentions (e.g., "dentist", "cardiologist")
+        - Common variations (e.g., "dental", "heart doctor")
+        - Context clues (e.g., "teeth" -> dentist, "heart" -> cardiologist)
+        
         Return ONLY a JSON object with these fields (include only if mentioned):
         {
+            "speciality": "string",
             "min_price": number,
             "max_price": number,
             "min_rating": number,
@@ -557,91 +567,26 @@ def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
             {"role": "user", "content": message}
         ]
         
-        # Get GPT response
+        # Call GPT to extract criteria
         response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o-mini-2024-07-18",
             messages=messages,
-            response_format={"type": "json_object"},
-            temperature=0
+            temperature=0.1  # Low temperature for consistent extraction
         )
         
-        # Parse the response to extract criteria
+        # Parse the response
         try:
-            import json
-            # Extract the JSON content from the response
-            content = response.choices[0].message.content
-            extracted = json.loads(content)
-            
-            # Validate and clean the extracted data
-            criteria = {}
-            
-            # Numeric fields validation
-            if "min_price" in extracted and isinstance(extracted["min_price"], (int, float)):
-                criteria["min_price"] = float(extracted["min_price"])
-            if "max_price" in extracted and isinstance(extracted["max_price"], (int, float)):
-                criteria["max_price"] = float(extracted["max_price"])
-            if "min_rating" in extracted and isinstance(extracted["min_rating"], (int, float)):
-                criteria["min_rating"] = float(extracted["min_rating"])
-            if "min_experience" in extracted and isinstance(extracted["min_experience"], (int, float)):
-                criteria["min_experience"] = float(extracted["min_experience"])
-                
-            # Name fields validation
-            if "doctor_name" in extracted and extracted["doctor_name"]:
-                criteria["doctor_name"] = extracted["doctor_name"].strip()
-            if "branch_name" in extracted and extracted["branch_name"]:
-                criteria["branch_name"] = extracted["branch_name"].strip()
-            
-            # Gender validation
-            if "gender" in extracted and extracted["gender"]:
-                gender = extracted["gender"].strip()
-                if gender.lower() in ["male", "female"]:
-                    criteria["gender"] = gender.capitalize()
-            
-            logger.info(f"Extracted search criteria: {criteria}")
-            return criteria
-            
-        except json.JSONDecodeError as json_error:
-            logger.error(f"Error parsing GPT JSON response: {str(json_error)}")
-            # Fallback to simple extraction
-            return _fallback_extraction(message)
-        except Exception as parse_error:
-            logger.error(f"Error processing GPT response: {str(parse_error)}")
-            return _fallback_extraction(message)
+            extracted = json.loads(response.choices[0].message.content)
+            logger.info(f"Extracted search criteria: {extracted}")
+            return extracted
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse GPT response as JSON: {str(e)}")
+            logger.error(f"Raw response: {response.choices[0].message.content}")
+            return {}
             
     except Exception as e:
-        logger.error(f"Error in criteria extraction: {str(e)}")
-        return _fallback_extraction(message)
-
-def _fallback_extraction(message: str) -> Dict[str, Any]:
-    """Fallback extraction for when GPT fails"""
-    message_lower = message.lower()
-    
-    # Extract gender if mentioned - enhanced to catch more variations
-    gender = None
-    male_patterns = ["male doctor", "male doctors", "man doctor", "men doctor", "only males", "only male", "male only", 
-                    "men only", "show me male", "show males", "show male", "find male", "find males"]
-    female_patterns = ["female doctor", "female doctors", "woman doctor", "women doctor", "lady doctor", 
-                      "only females", "only female", "female only", "females only", "women only", "woman only",
-                      "show me female", "show females", "show female", "find female", "find females"]
-    
-    for pattern in male_patterns:
-        if pattern in message_lower:
-            gender = "Male"
-            break
-            
-    if not gender:  # Only check female patterns if male wasn't found
-        for pattern in female_patterns:
-            if pattern in message_lower:
-                gender = "Female"
-                break
-            
-    # Build criteria dictionary
-    criteria = {}
-    if gender:
-        criteria["gender"] = gender
-            
-    logger.info(f"Fallback extraction: {criteria}")
-    return criteria
+        logger.error(f"Error extracting search criteria: {str(e)}")
+        return {}
 
 def unified_doctor_search_tool(input_data: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
     """

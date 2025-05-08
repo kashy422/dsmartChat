@@ -18,7 +18,7 @@ from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_openai import ChatOpenAI
 from openai import OpenAI
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple, Union
 import time
 import re
 import logging
@@ -29,6 +29,8 @@ from pprint import pprint
 import threading
 from decimal import Decimal
 import datetime
+from pydantic import BaseModel
+from sqlalchemy import text
 
 from .agent_tools import (
     store_patient_details_tool,
@@ -51,6 +53,19 @@ from .query_builder_agent import (
     extract_search_criteria_tool,
     extract_search_criteria_from_message
 )
+from .db import DB
+
+# Initialize thread_local storage
+thread_local = threading.local()
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+# Initialize the database connection
+db = DB()
+
+# Initialize OpenAI client
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY"))
 
 # Helper function to clear symptom analysis data
 def clear_symptom_analysis(reason="", session_id=None):
@@ -517,27 +532,73 @@ def validate_doctor_result(result, patient_data=None, json_requested=True):
     message = ""
     if isinstance(result, dict) and "response" in result and isinstance(result["response"], dict):
         message = result["response"].get("message", "")
+        
+        # Get the original message to detect language
+        original_message = ""
+        if isinstance(result, dict):
+            if "criteria" in result and isinstance(result["criteria"], dict):
+                original_message = result["criteria"].get("original_message", "")
+            elif "response" in result and isinstance(result["response"], dict):
+                original_message = result["response"].get("original_message", "")
+        
+        # Handle special messages using the main chat engine's context
+        if message in ["NO_SPECIALTY_FOUND", "NO_DOCTORS_FOUND", "SEARCH_ERROR", "UNEXPECTED_ERROR"]:
+            try:
+                # Get the current session history
+                session_id = getattr(thread_local, 'session_id', '')
+                history = get_session_history(session_id)
+                
+                # Create a context-aware prompt based on the error type
+                error_context = {
+                    "NO_SPECIALTY_FOUND": "The user has searched for a medical specialty that we don't have available yet. Please acknowledge their search and explain we are actively expanding our network of doctors and specialists.",
+                    "NO_DOCTORS_FOUND": "The user's search for doctors in their specified specialty and location returned no results. Please acknowledge their search and explain we are actively expanding our network of doctors in their area.",
+                    "SEARCH_ERROR": "There was an error searching for doctors. Please acknowledge the issue and suggest what they can do next.",
+                    "UNEXPECTED_ERROR": "An unexpected error occurred. Please acknowledge the issue and suggest what they can do next."
+                }
+                
+                # Get the current messages from history, filtering out tool calls and null content
+                messages = []
+                for msg in history.messages:
+                    if msg['type'] == 'human' and msg.get('content'):
+                        messages.append({"role": "user", "content": msg['content']})
+                    elif msg['type'] == 'ai' and msg.get('content'):
+                        messages.append({"role": "assistant", "content": msg['content']})
+                
+                # If we have no valid messages, create a basic context
+                if not messages:
+                    messages = [
+                        {"role": "system", "content": "You are a medical assistant. Provide responses in a professional but warm tone."},
+                        {"role": "user", "content": original_message or "Hello"}
+                    ]
+                
+                # Add the error context as a new user message
+                messages.append({"role": "user", "content": error_context[message]})
+                
+                # Get response from the main chat engine
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini-2024-07-18",
+                    messages=messages
+                )
+                message = response.choices[0].message.content
+                
+            except Exception as e:
+                logger.error(f"Error generating response from chat history: {str(e)}")
+                # Fallback to a simple message if there's an error
+                message = "I apologize, but I couldn't find any matching results. Please try a different search term or location."
     
     # Ensure patient data is properly formatted
     formatted_patient_data = patient_data or {"session_id": getattr(thread_local, 'session_id', '')}
-    if isinstance(formatted_patient_data, dict):
-        # Ensure all fields are present
-        formatted_patient_data = {
-            "Name": formatted_patient_data.get("Name"),
-            "Age": formatted_patient_data.get("Age"),
-            "Gender": formatted_patient_data.get("Gender"),
-            "Location": formatted_patient_data.get("Location"),
-            "Issue": formatted_patient_data.get("Issue"),
-            "session_id": formatted_patient_data.get("session_id")
-        }
     
-    # Return the standardized response format (single level response)
+    # Return the validated result
     return {
         "response": {
             "message": message,
             "patient": formatted_patient_data,
-            "data": doctors_data
-        }
+            "data": doctors_data,
+            "is_doctor_search": True
+        },
+        "display_results": doctor_count > 0,
+        "doctor_count": doctor_count
     }
 
 def simplify_doctor_message(response_object, logger):
@@ -951,7 +1012,8 @@ def chat_engine():
                                         "Age": None,
                                         "Gender": None,
                                         "Location": None,
-                                        "Issue": None
+                                        "Issue": None,
+                                        "session_id": session_id
                                     })
                                 }
                             }
@@ -969,57 +1031,23 @@ def chat_engine():
                             
                             # Execute the tool
                             logger.info("🔄 Executing store_patient_details tool...")
-                            # Extract patient info from message
                             try:
-                                # Use OpenAI to extract patient info
-                                extraction_prompt = f"""
-                                Extract patient information from this message. Look for:
-                                - Name
-                                - Age
-                                - Gender
-                                - Location
-                                - Health issues/symptoms (store in Issue field)
-
-                                Extract Gender of the patient based on the Patient's Name provided.
+                                # Call store_patient_details with session_id
+                                result = store_patient_details(session_id=session_id)
                                 
-                                Message: {user_message}
-                                
-                                For health issues/symptoms:
-                                1. Use ONLY the exact words and descriptions provided by the user
-                                2. Do not add any interpretation or embellishment
-                                3. Do not modify or rephrase the symptoms
-                                4. If multiple symptoms are mentioned, keep them in the user's original wording
-                                5. Do not add any medical terminology unless specifically used by the user
-                                
-                                Return ONLY a JSON object with the fields you find. If a field is not found, omit it.
-                                Example: {{"Name": "John", "Age": 30, "Gender": "Male", "Issue": "headache and fever"}}
-                                """
-                                
-                                extraction = client.chat.completions.create(
-                                    model="gpt-4o-mini-2024-07-18",
-                                    messages=[
-                                        {"role": "system", "content": "You are a patient information extractor. Extract ONLY the information present in the message. Use the exact words provided by the user for symptoms, without any interpretation or modification."},
-                                        {"role": "user", "content": extraction_prompt}
-                                    ]
-                                )
-                                
-                                extracted_data = json.loads(extraction.choices[0].message.content)
-                                logger.info(f"📋 Extracted patient data: {json.dumps(extracted_data, indent=2)}")
-                                
-                                # Ensure Issue field is properly formatted
-                                if "Issue" in extracted_data:
-                                    # Clean up the Issue field
-                                    issue = extracted_data["Issue"]
-                                    if isinstance(issue, str):
-                                        # Remove any extra whitespace
-                                        issue = " ".join(issue.split())
-                                        # Keep the original case as provided by the user
-                                        extracted_data["Issue"] = issue
-                                        logger.info(f"✅ Formatted Issue field: {issue}")
-                                
-                                # Call store_patient_details with extracted data
-                                result = store_patient_details(session_id=session_id, **extracted_data)
-                                logger.info(f"📋 Patient details result: {json.dumps(result, indent=2)}")
+                                # Ensure result is JSON serializable
+                                if isinstance(result, dict):
+                                    result = {k: v if v is not None else None for k, v in result.items()}
+                                else:
+                                    result = {
+                                        "Name": None,
+                                        "Age": None,
+                                        "Gender": None,
+                                        "Location": None,
+                                        "Issue": None,
+                                        "session_id": session_id,
+                                        "error": "Invalid result format"
+                                    }
                                 
                                 # Add tool result message immediately after the tool call
                                 messages.append({
@@ -1032,27 +1060,30 @@ def chat_engine():
                                 
                                 # Update history with patient data
                                 if result and isinstance(result, dict):
-                                    # Log the current state of patient data
-                                    current_data = history.get_patient_data()
-                                    logger.info(f"📊 Current patient data before update: {json.dumps(current_data, indent=2)}")
-                                    
-                                    # Update the data
                                     history.set_patient_data(result)
-                                    
-                                    # Log the updated state
-                                    updated_data = history.get_patient_data()
-                                    logger.info(f"📊 Updated patient data after store: {json.dumps(updated_data, indent=2)}")
-                                    
-                                    # Log specific fields that were updated
-                                    for key, value in result.items():
-                                        if value is not None:
-                                            logger.info(f"✅ Updated {key}: {value}")
+                                    logger.info(f"📊 Updated patient data: {json.dumps(result, indent=2)}")
                                 else:
                                     logger.warning("⚠️ No patient data to store - result was empty or invalid")
                                     
                             except Exception as e:
-                                logger.error(f"❌ Error in store_patient_details: {str(e)}", exc_info=True)
-                                # Continue with doctor search even if patient extraction fails
+                                logger.error(f"❌ Error in store_patient_details: {str(e)}")
+                                # Add error response to messages
+                                error_result = {
+                                    "Name": None,
+                                    "Age": None,
+                                    "Gender": None,
+                                    "Location": None,
+                                    "Issue": None,
+                                    "session_id": session_id,
+                                    "error": str(e)
+                                }
+                                messages.append({
+                                    "role": "tool",
+                                    "content": json.dumps(error_result),
+                                    "tool_call_id": patient_tool_call["id"],
+                                    "name": "store_patient_details"
+                                })
+                                logger.info("✅ Added error response to messages")
                         
                         except Exception as e:
                             logger.error(f"❌ Error in store_patient_details: {str(e)}", exc_info=True)
@@ -1326,7 +1357,7 @@ def chat_engine():
                         
                         # Check if we found specialty/subspecialty, if not use fallback
                         if not specialty_criteria:
-                            logger.warning("EXTRACTION: Could not find specialty/subspecialty in the expected location. Using fallback method.")
+                            logger.warning("EXTRACTION: Could not find specialty/subspecialty in the expected location.")
                             
                             # Log the structure of symptom_analysis to help diagnose the issue
                             logger.debug(f"EXTRACTION DEBUG: symptom_analysis keys: {list(symptom_analysis.keys())}")
@@ -1334,10 +1365,31 @@ def chat_engine():
                                 logger.debug(f"EXTRACTION DEBUG: detailed_analysis keys: {list(symptom_analysis['detailed_analysis'].keys())}")
                                 if "symptom_analysis" in symptom_analysis["detailed_analysis"]:
                                     logger.debug(f"EXTRACTION DEBUG: symptom_analysis keys: {list(symptom_analysis['detailed_analysis']['symptom_analysis'].keys())}")
-                        
-                            # Fallback to DENTISTRY if no specialty found
-                            specialty_criteria["speciality"] = "Dentistry"
-                            logger.info("No specialty found from analysis, using default Dentistry")
+                            
+                            # Generate professional message using GPT instead of hardcoded message
+                            try:
+                                response = client.chat.completions.create(
+                                    model="gpt-4o-mini-2024-07-18",
+                                    messages=[
+                                        {"role": "system", "content": "You are a medical assistant. When no matching specialty is found in our database, provide a two-part response: First, acknowledge the symptoms and suggest appropriate medical specialties they should consult. Second, explain that we are actively expanding our network of doctors and specialists. Keep it professional, empathetic, and reassuring."},
+                                        {"role": "user", "content": "The user has described symptoms that require medical attention, but we don't have matching specialties in our database yet. First, acknowledge their symptoms and suggest which type of specialist they should consult (like cardiologist for heart issues, pulmonologist for breathing problems, etc.). Then, explain that we are actively expanding our network of doctors and specialists to include these specialties. Keep the tone professional but warm and reassuring."}
+                                    ]
+                                )
+                                message = response.choices[0].message.content
+                            except Exception as e:
+                                logger.error(f"Error generating GPT response: {str(e)}")
+                                message = "I couldn't determine the appropriate medical specialty for your symptoms. Please try describing your symptoms in more detail or specify which type of doctor you're looking for."
+                            
+                            logger.info("No specialty found from analysis, returning empty result with GPT message")
+                            return {
+                                "response": {
+                                    "message": message,
+                                    "data": {"doctors": []},
+                                    "is_doctor_search": True
+                                },
+                                "display_results": False,
+                                "doctor_count": 0
+                            }
                         
                         # Set the search parameters
                         search_params = specialty_criteria.copy()
@@ -1393,7 +1445,8 @@ def chat_engine():
                                     "Age": None,
                                     "Gender": None,
                                     "Location": None,
-                                    "Issue": None
+                                    "Issue": None,
+                                    "session_id": session_id
                                 })
                             }
                         }
@@ -1472,21 +1525,8 @@ def chat_engine():
                             
                             # Update history with patient data
                             if result and isinstance(result, dict):
-                                # Log the current state of patient data
-                                current_data = history.get_patient_data()
-                                logger.info(f"📊 Current patient data before update: {json.dumps(current_data, indent=2)}")
-                                
-                                # Update the data
                                 history.set_patient_data(result)
-                                
-                                # Log the updated state
-                                updated_data = history.get_patient_data()
-                                logger.info(f"📊 Updated patient data after store: {json.dumps(updated_data, indent=2)}")
-                                
-                                # Log specific fields that were updated
-                                for key, value in result.items():
-                                    if value is not None:
-                                        logger.info(f"✅ Updated {key}: {value}")
+                                logger.info(f"📊 Updated patient data: {json.dumps(result, indent=2)}")
                             else:
                                 logger.warning("⚠️ No patient data to store - result was empty or invalid")
                                 
@@ -1526,7 +1566,11 @@ def chat_engine():
                         
                         for tool_call in response_message.tool_calls:
                             function_name = tool_call.function.name
-                            function_args = json.loads(tool_call.function.arguments)
+                            try:
+                                function_args = json.loads(tool_call.function.arguments)
+                            except json.JSONDecodeError as e:
+                                logger.error(f"❌ Error parsing tool arguments: {str(e)}")
+                                function_args = {}
                             
                             # Display tool call header
                             tool_header = f"""
@@ -1538,42 +1582,110 @@ def chat_engine():
                             
                             # Process different tool types
                             if function_name == "store_patient_details":
-                                logger.info(f"📋 Storing patient details: {function_args}")
+                                logger.info(f"🔍 DEBUG: Starting store_patient_details processing")
+                                logger.info(f"🔍 DEBUG: Input function_args: {json.dumps(function_args, indent=2)}")
                                 try:
-                                    result = store_patient_details(session_id=session_id, **function_args)
+                                    # Get existing patient data to preserve valid fields
+                                    existing_data = history.get_patient_data() or {}
+                                    logger.info(f"🔍 DEBUG: Existing patient data: {json.dumps(existing_data, indent=2)}")
                                     
-                                    # Update the session history with patient details
-                                    history.set_patient_data(function_args)
-                                    logger.info(f"✅ Updated session history with patient data: {function_args}")
+                                    # Ensure age is properly formatted as integer
+                                    if "Age" in function_args and function_args["Age"] is not None:
+                                        logger.info(f"🔍 DEBUG: Processing Age value: {function_args['Age']} (type: {type(function_args['Age'])})")
+                                        try:
+                                            # Convert age to integer if it's a string
+                                            if isinstance(function_args["Age"], str):
+                                                # Remove any non-numeric characters
+                                                age_str = ''.join(filter(str.isdigit, function_args["Age"]))
+                                                logger.info(f"🔍 DEBUG: Cleaned age string: '{age_str}'")
+                                                if age_str:
+                                                    function_args["Age"] = int(age_str)
+                                                    logger.info(f"🔍 DEBUG: Converted age to integer: {function_args['Age']}")
+                                                else:
+                                                    function_args["Age"] = None
+                                                    logger.info("🔍 DEBUG: Age string contained no digits, setting to None")
+                                            # If age is already an integer, keep it as is
+                                            elif not isinstance(function_args["Age"], int):
+                                                function_args["Age"] = None
+                                                logger.info(f"🔍 DEBUG: Invalid age type: {type(function_args['Age'])}, setting to None")
+                                        except (ValueError, TypeError) as e:
+                                            logger.info(f"🔍 DEBUG: Error converting age: {str(e)}, setting to None")
+                                            function_args["Age"] = None
+                                    
+                                    # Merge with existing data, preserving valid fields
+                                    merged_args = {**existing_data, **function_args}
+                                    logger.info(f"🔍 DEBUG: Merged arguments: {json.dumps(merged_args, indent=2)}")
+                                    
+                                    # Remove None values to preserve existing data
+                                    for key in list(merged_args.keys()):
+                                        if merged_args[key] is None and key in existing_data:
+                                            merged_args[key] = existing_data[key]
+                                            logger.info(f"🔍 DEBUG: Preserved existing value for {key}: {existing_data[key]}")
+                                    
+                                    logger.info(f"🔍 DEBUG: Final merged arguments before store_patient_details call: {json.dumps(merged_args, indent=2)}")
+                                    
+                                    # Call store_patient_details with merged data
+                                    result = store_patient_details(session_id=session_id, **merged_args)
+                                    logger.info(f"🔍 DEBUG: store_patient_details result: {json.dumps(result, indent=2)}")
+                                    
+                                    # Ensure result is JSON serializable
+                                    if isinstance(result, dict):
+                                        result = {k: v if v is not None else None for k, v in result.items()}
+                                        logger.info(f"🔍 DEBUG: Cleaned result dictionary: {json.dumps(result, indent=2)}")
+                                    else:
+                                        logger.info(f"🔍 DEBUG: Result is not a dictionary, creating default structure")
+                                        result = {
+                                            "Name": merged_args.get("Name"),
+                                            "Age": None,  # Age is not mandatory
+                                            "Gender": merged_args.get("Gender"),
+                                            "Location": merged_args.get("Location"),
+                                            "Issue": merged_args.get("Issue"),
+                                            "session_id": session_id
+                                        }
+                                    
+                                    # Update the session history with merged data
+                                    history.set_patient_data(merged_args)
+                                    logger.info(f"🔍 DEBUG: Updated session history with patient data: {json.dumps(merged_args, indent=2)}")
                                     
                                     # Record this execution in history
                                     history.add_tool_execution("store_patient_details", result)
+                                    logger.info(f"🔍 DEBUG: Added tool execution to history")
                                     
                                     # Add tool result immediately after the tool call
+                                    tool_result = {
+                                        "role": "tool",
+                                        "content": json.dumps(result),
+                                        "tool_call_id": tool_call.id,
+                                        "name": function_name
+                                    }
+                                    logger.info(f"🔍 DEBUG: Tool result message: {json.dumps(tool_result, indent=2)}")
+                                    messages.append(tool_result)
+                                    logger.info(f"🔍 DEBUG: Added tool result to messages")
+                                
+                                except Exception as e:
+                                    logger.info(f"🔍 DEBUG: Exception in store_patient_details: {str(e)}")
+                                    logger.info(f"🔍 DEBUG: Exception type: {type(e)}")
+                                    logger.info(f"🔍 DEBUG: Exception args: {e.args}")
+                                    # Continue with existing data, don't show error to user
+                                    result = {
+                                        "Name": existing_data.get("Name"),
+                                        "Age": None,  # Age is not mandatory
+                                        "Gender": existing_data.get("Gender"),
+                                        "Location": existing_data.get("Location"),
+                                        "Issue": existing_data.get("Issue"),
+                                        "session_id": session_id
+                                    }
+                                    logger.info(f"🔍 DEBUG: Created fallback result: {json.dumps(result, indent=2)}")
+                                    # Update history with preserved data
+                                    history.set_patient_data(result)
+                                    logger.info(f"🔍 DEBUG: Updated history with fallback data")
                                     messages.append({
                                         "role": "tool",
                                         "content": json.dumps(result),
                                         "tool_call_id": tool_call.id,
                                         "name": function_name
                                     })
-                                except Exception as e:
-                                    logger.error(f"❌ Error in store_patient_details: {str(e)}")
-                                    # Add error response to maintain message flow
-                                    error_result = {
-                                        "Name": None,
-                                        "Age": None,
-                                        "Gender": None,
-                                        "Location": None,
-                                        "Issue": None,
-                                        "session_id": session_id,
-                                        "error": str(e)
-                                    }
-                                    messages.append({
-                                        "role": "tool",
-                                        "content": json.dumps(error_result),
-                                        "tool_call_id": tool_call.id,
-                                        "name": function_name
-                                    })
+                                    logger.info(f"🔍 DEBUG: Added fallback result to messages")
                             elif function_name == "search_doctors_dynamic":
                                 logger.info(f"🔍 Searching for doctors: {function_args}")
                                 search_query = function_args.get('user_message', '')

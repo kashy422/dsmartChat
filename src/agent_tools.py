@@ -327,10 +327,21 @@ def dynamic_doctor_search(user_query: str) -> Dict[str, Any]:
         
         # If we don't have a specialty yet, check for common terms in the query
         if "speciality" not in combined_criteria:
-            # Check for dentist in query
+            # Only set Dentistry if explicitly mentioned in query
             if "dentist" in user_query.lower():
                 logger.info("Explicitly setting DENTISTRY as specialty based on query text")
                 combined_criteria["speciality"] = "DENTISTRY"
+            else:
+                logger.info("No specialty found in query and no explicit mention of dentist")
+                return {
+                    "response": {
+                        "message": "I couldn't determine which type of doctor you're looking for. Please specify the type of doctor or describe your symptoms in more detail.",
+                        "data": {"doctors": []},
+                        "is_doctor_search": True
+                    },
+                    "display_results": False,
+                    "doctor_count": 0
+                }
         
         # Add coordinates to combined criteria if available
         if lat is not None and long is not None:
