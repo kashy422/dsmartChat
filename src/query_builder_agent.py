@@ -429,11 +429,9 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
             # Create standardized response format
             search_response = {
                 "response": {
-                    "message": None,  # Let main LLM handle the message
                     "data": data["doctors"],  # The doctors array
                     "doctor_count": len(data["doctors"]),
-                    "is_doctor_search": True,
-                    "patient": {"session_id": getattr(thread_local, 'session_id', '')}
+                    "is_doctor_search": True
                 },
                 "display_results": len(data["doctors"]) > 0,
                 "doctor_count": len(data["doctors"])
@@ -448,7 +446,7 @@ def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, A
                 "total_time": execution_time,
                 "processing_time": execution_time
             }
-            
+            #for saving file onley
             # Log the final result structure
             logger.info(f"DOCTOR SEARCH: Final result structure: {list(search_response.keys())}")
             logger.info(f"DOCTOR SEARCH: Found {len(data['doctors'])} doctors")
