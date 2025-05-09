@@ -14,6 +14,7 @@ from .utils import CustomCallBackHandler, thread_local, setup_improved_logging, 
 from src.AESEncryptor import AESEncryptor
 from typing import Dict, List, Any, Optional
 from dotenv import load_dotenv
+import re
 
 # Import our essential tools and functionality
 from .agent_tools import analyze_symptoms, dynamic_doctor_search, store_patient_details
@@ -128,6 +129,25 @@ async def chat(
     start_time = time.time()
     
     try:
+
+        if session_id == None or session_id == "":
+            return {
+                "response": {
+                    "error" : "EMPTY SESSION ID NOT ALLOWED"
+                }
+            }
+
+        
+        pattern = r'^www\|.+'
+
+        if re.match(pattern, session_id):
+            print("Valid Session ID match: ", session_id)
+        else:
+            return {
+                "response": {
+                    "error" : "INVALID SESSION ID FORMAT"
+                }
+            }
         # Handle audio input
         if audio:
             if not audio.filename.lower().endswith(".wav"):
