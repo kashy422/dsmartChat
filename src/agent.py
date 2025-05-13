@@ -272,6 +272,7 @@ SYMPTOM FLOW (ONLY if user specifically mentions health issues):
 TOOL USAGE:
 1. store_patient_details - Use when user provides information
 2. search_doctors_dynamic - Use IMMEDIATELY for doctor/clinic searches - NEVER skip this for doctor searches
+   *** IMPORTANT: When calling search_doctors_dynamic, you MUST include both 'user_message' and coordinates in your call. Always include latitude and longitude when they are available from the user's location. ***
 3. analyze_symptoms - Use ONLY when user explicitly describes health issues
 
 *** EXTREMELY IMPORTANT - SEARCH RESULT DISPLAY REQUIREMENTS ***
@@ -976,6 +977,9 @@ def chat_engine():
                     # Store coordinates in thread_local for use by other functions
                     thread_local.latitude = lat
                     thread_local.longitude = long
+                    
+                    # Remove environment variable usage for coordinates
+                    # Keep only thread_local storage
 
                 # Get config from kwargs if provided
                 config = kwargs.get('config', {})
@@ -1012,8 +1016,7 @@ def chat_engine():
                                         "Age": None,
                                         "Gender": None,
                                         "Location": None,
-                                        "Issue": None,
-                                        "session_id": session_id
+                                        "Issue": None
                                     })
                                 }
                             }
@@ -1113,6 +1116,9 @@ def chat_engine():
                         if lat is not None and long is not None:
                             search_params["latitude"] = lat
                             search_params["longitude"] = long
+                            logger.info(f"DIRECT SEARCH: Added coordinates to search parameters: lat={lat}, long={long}")
+                        else:
+                            logger.warning(f"DIRECT SEARCH: No coordinates available for this search")
                         
                         # Debug log to check final search parameters
                         logger.info(f"FINAL SEARCH PARAMS: {search_params}")
@@ -1445,8 +1451,7 @@ def chat_engine():
                                     "Age": None,
                                     "Gender": None,
                                     "Location": None,
-                                    "Issue": None,
-                                    "session_id": session_id
+                                    "Issue": None
                                 })
                             }
                         }
@@ -1491,12 +1496,36 @@ def chat_engine():
                             extraction = client.chat.completions.create(
                                 model="gpt-4o-mini-2024-07-18",
                                 messages=[
-                                    {"role": "system", "content": "You are a patient information extractor. Extract ONLY the information present in the message. Use the exact words provided by the user for symptoms, without any interpretation or modification."},
+                                    {"role": "system", "content": "You are a patient information extractor. Extract ONLY the information present in the message. For numeric inputs like age, return them as integers. Use the exact words provided by the user for symptoms, without any interpretation or modification. Return a clean JSON object without any markdown formatting or extra characters."},
                                     {"role": "user", "content": extraction_prompt}
                                 ]
                             )
                             
-                            extracted_data = json.loads(extraction.choices[0].message.content)
+                            try:
+                                # First try parsing as JSON
+                                content = extraction.choices[0].message.content.strip()
+                                # Remove any markdown formatting
+                                content = content.replace("```json", "").replace("```", "").strip()
+                                extracted_data = json.loads(content)
+                            except json.JSONDecodeError:
+                                # If JSON parsing fails, check if it's a simple numeric input
+                                if content.isdigit():
+                                    # If it's just a number, assume it's age
+                                    extracted_data = {"Age": int(content)}
+                                else:
+                                    # If it's not a number, try to extract structured data
+                                    try:
+                                        # Try to parse as a simple key-value format
+                                        if ":" in content:
+                                            key, value = content.split(":", 1)
+                                            extracted_data = {key.strip(): value.strip()}
+                                        else:
+                                            # If all else fails, treat as a symptom/issue
+                                            extracted_data = {"Issue": content}
+                                    except Exception as e:
+                                        logger.error(f"Failed to parse content: {content}, error: {str(e)}")
+                                        extracted_data = {"Issue": content}
+                            
                             logger.info(f"📋 Extracted patient data: {json.dumps(extracted_data, indent=2)}")
                             
                             # Ensure Issue field is properly formatted
@@ -1510,8 +1539,21 @@ def chat_engine():
                                     extracted_data["Issue"] = issue
                                     logger.info(f"✅ Formatted Issue field: {issue}")
                             
-                            # Call store_patient_details with extracted data
-                            result = store_patient_details(session_id=session_id, **extracted_data)
+                            # Get existing patient data to preserve valid fields
+                            existing_data = history.get_patient_data() or {}
+                            
+                            # Merge new data with existing data, only updating non-None values
+                            merged_data = {**existing_data}
+                            for key, value in extracted_data.items():
+                                if value is not None:
+                                    merged_data[key] = value
+                            
+                            # Remove session_id from merged_data if it exists
+                            if "session_id" in merged_data:
+                                del merged_data["session_id"]
+                            
+                            # Call store_patient_details with merged data and session_id separately
+                            result = store_patient_details(session_id=session_id, **merged_data)
                             logger.info(f"📋 Patient details result: {json.dumps(result, indent=2)}")
                             
                             # Add tool result message immediately after the tool call
@@ -1696,6 +1738,36 @@ def chat_engine():
                                 
                                 if has_symptom_analysis:
                                     logger.info(f"✅ Using symptom analysis for doctor search: {json.dumps(symptom_analysis)[:100]}...")
+
+                                # IMPORTANT: Always include latitude and longitude in the search query
+                                # Make sure function_args is a dictionary with lat/long if available
+                                if isinstance(function_args, dict):
+                                    # Add lat/long to the function args if not already present
+                                    if 'latitude' not in function_args and lat is not None:
+                                        function_args['latitude'] = lat
+                                        logger.info(f"Added missing latitude {lat} to search criteria")
+                                    if 'longitude' not in function_args and long is not None:
+                                        function_args['longitude'] = long
+                                        logger.info(f"Added missing longitude {long} to search criteria")
+                                # If not a dictionary, parse it and add coordinates
+                                elif isinstance(function_args, str):
+                                    try:
+                                        parsed_args = json.loads(function_args)
+                                        if isinstance(parsed_args, dict):
+                                            if 'latitude' not in parsed_args and lat is not None:
+                                                parsed_args['latitude'] = lat
+                                                logger.info(f"Added missing latitude {lat} to parsed search criteria")
+                                            if 'longitude' not in parsed_args and long is not None:
+                                                parsed_args['longitude'] = long
+                                                logger.info(f"Added missing longitude {long} to parsed search criteria")
+                                            function_args = parsed_args
+                                    except Exception as e:
+                                        logger.error(f"Error parsing search criteria string: {str(e)}")
+                                
+                                # Convert to JSON for dynamic_doctor_search if needed
+                                if isinstance(function_args, dict):
+                                    search_query = json.dumps(function_args)
+                                    logger.info(f"Using structured search criteria with coordinates: {search_query}")
                                 
                                 # Execute search
                                 try:
@@ -1806,6 +1878,9 @@ def chat_engine():
                                         if lat is not None and long is not None:
                                             search_criteria["latitude"] = lat
                                             search_criteria["longitude"] = long
+                                            logger.info(f"SYMPTOM SEARCH: Added coordinates to search criteria: lat={lat}, long={long}")
+                                        else:
+                                            logger.warning(f"SYMPTOM SEARCH: No coordinates available for doctor search after symptom analysis")
                                         
                                         # Call doctor search
                                         try:

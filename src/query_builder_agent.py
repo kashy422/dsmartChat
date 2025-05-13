@@ -224,196 +224,70 @@ def normalize_specialty(specialty_name: str) -> dict:
     logger.info(f"SPECIALTY: No mapping found for '{specialty_name}', keeping as is")
     return {"specialty": specialty_name}
 
-def unified_doctor_search(input_data: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
-    """
-    Unified doctor search function that handles both direct criteria and natural language queries.
-    This function is called by the agent tools.
-    
-    Args:
-        input_data: Either a string (natural language query) or dict containing:
-            - speciality: Specialty from symptom analysis
-            - subspeciality: Subspecialty from symptom analysis
-            - latitude: Optional latitude coordinate
-            - longitude: Optional longitude coordinate
-            - other search criteria parameters
-        
-    Returns:
-        Search results in the standardized format
-    """
+def unified_doctor_search(input_data: dict) -> dict:
     try:
-        start_time = time.time()
         logger.info(f"DOCTOR SEARCH: Starting unified search with input: {input_data}")
-        final_criteria = {}
         
-        # If input is a string, treat as natural language query
-        if isinstance(input_data, str):
-            # Extract criteria using GPT
-            extracted = extract_search_criteria_from_message(input_data)
-            logger.info(f"DOCTOR SEARCH: Extracted criteria from message: {extracted}")
-            final_criteria.update(extracted)
-            
-            # Get symptom analysis from thread_local if it exists
-            symptom_analysis = getattr(thread_local, 'symptom_analysis', None)
-            if symptom_analysis:
-                logger.info(f"DOCTOR SEARCH: Found symptom analysis in thread_local")
-                try:
-                    # Safely access specialty information, checking multiple possible locations
-                    specialties = []
-                    
-                    # Check multiple possible locations where specialties could be stored
-                    if 'symptom_analysis' in symptom_analysis:
-                        sa = symptom_analysis.get('symptom_analysis', {})
-                        if 'matched_specialties' in sa and sa['matched_specialties']:
-                            specialties = sa['matched_specialties']
-                        elif 'recommended_specialties' in sa and sa['recommended_specialties']:
-                            specialties = sa['recommended_specialties']
-                        elif 'specialties' in sa and sa['specialties']:
-                            specialties = sa['specialties']
-                    
-                    # If we found specialties, use the top one
-                    if specialties and len(specialties) > 0:
-                        top_specialty = specialties[0]
-                        specialty = top_specialty.get('specialty') or top_specialty.get('name')
-                        if specialty:
-                            normalized_result = normalize_specialty(specialty)
-                            final_criteria['speciality'] = normalized_result["specialty"]
-                            logger.info(f"DOCTOR SEARCH: Normalized specialty from '{specialty}' to '{normalized_result['specialty']}'")
-                            
-                            # Get subspecialty from normalization or from original object
-                            if "subspecialty" in normalized_result:
-                                final_criteria['subspecialty'] = normalized_result["subspecialty"]
-                            elif 'subspecialty' in top_specialty:
-                                final_criteria['subspecialty'] = top_specialty['subspecialty']
-                except Exception as e:
-                    logger.error(f"Error extracting specialty info from symptom analysis: {str(e)}")
-        else:
-            # Input is a dictionary, use it directly
-            final_criteria.update(input_data)
-            
-        # Handle specialty field that might be in different formats
-        if 'specialty' in final_criteria and 'speciality' not in final_criteria:
-            # If specialty is a dict with specialty/subspecialty, extract and use standardized field names
-            if isinstance(final_criteria['specialty'], dict):
-                specialty_obj = final_criteria['specialty']
-                specialty_name = specialty_obj.get('specialty') or specialty_obj.get('name')
-                
-                if specialty_name:
-                    normalized_result = normalize_specialty(specialty_name)
-                    final_criteria['speciality'] = normalized_result["specialty"]
-                    
-                    # Get subspecialty from normalization or from original object
-                    if "subspecialty" in normalized_result:
-                        final_criteria['subspecialty'] = normalized_result["subspecialty"]
-                    elif 'subspecialty' in specialty_obj:
-                        final_criteria['subspecialty'] = specialty_obj['subspecialty']
-                
-                # Remove the original field to avoid confusion
-                if 'specialty' in final_criteria:
-                    del final_criteria['specialty']
-            else:
-                # Simple string value - copy to standard field name
-                specialty_name = final_criteria['specialty']
-                if specialty_name:
-                    normalized_result = normalize_specialty(specialty_name)
-                    final_criteria['speciality'] = normalized_result["specialty"]
-                    if "subspecialty" in normalized_result:
-                        final_criteria['subspecialty'] = normalized_result["subspecialty"]
-                
-                if 'specialty' in final_criteria:
-                    del final_criteria['specialty']
+        # Extract coordinates
+        lat = input_data.get('latitude')
+        long = input_data.get('longitude')
+        if lat and long:
+            logger.info(f"DOCTOR SEARCH: Using coordinates from input data: lat={lat}, long={long}")
         
-        # Get coordinates from input data first, then thread_local, then use defaults
-        if 'latitude' in final_criteria and 'longitude' in final_criteria:
-            logger.info(f"DOCTOR SEARCH: Using coordinates from input data: lat={final_criteria['latitude']}, long={final_criteria['longitude']}")
-        else:
-            # Try to get coordinates from thread_local
-            lat = getattr(thread_local, 'latitude', None)
-            long = getattr(thread_local, 'longitude', None)
-            
-            if lat is not None and long is not None:
-                logger.info(f"DOCTOR SEARCH: Using coordinates from thread_local: lat={lat}, long={long}")
-                final_criteria['latitude'] = lat
-                final_criteria['longitude'] = long
-            else:
-                # Use default coordinates only if none are provided
-                final_criteria['latitude'] = 0.0
-                final_criteria['longitude'] = 0.0
-                logger.info("DOCTOR SEARCH: No coordinates found, using defaults: lat=0.0, long=0.0")
-            
-        # Always include the original query for context
-        if isinstance(input_data, str):
-            final_criteria['original_message'] = input_data
-        elif 'original_message' not in final_criteria and 'user_message' in final_criteria:
-            final_criteria['original_message'] = final_criteria['user_message']
-            
-        # Log the final criteria
-        logger.info(f"DOCTOR SEARCH: Final search criteria: {final_criteria}")
+        # Build search criteria
+        search_criteria = {
+            'latitude': lat,
+            'longitude': long,
+            'original_message': input_data.get('user_message', '')
+        }
         
-        # Build the query
-        sp_name, params = build_query(SearchCriteria(**final_criteria))
+        # Add any other criteria from input_data
+        for key, value in input_data.items():
+            if key not in ['latitude', 'longitude', 'user_message'] and value is not None:
+                search_criteria[key] = value
         
-        # Execute the stored procedure
-        logger.info(f"DOCTOR SEARCH: Executing stored procedure: {sp_name}")
-        result = db.execute_stored_procedure(sp_name, params)
+        logger.info(f"DOCTOR SEARCH: Final search criteria: {search_criteria}")
         
-        # Process the results
-        if result and isinstance(result, dict) and 'data' in result:
-            data = result['data']
-            if isinstance(data, dict) and 'doctors' in data:
-                doctors = data['doctors']
-                doctor_count = len(doctors)
-                logger.info(f"DOCTOR SEARCH: Found {doctor_count} doctors in result['data']['doctors']")
-                
-                if doctor_count == 0:
-                    logger.warning("No doctors found in search results")
-                    return {
-                        "response": {
-                            "message": "NO_DOCTORS_FOUND",
-                            "data": {"doctors": []},
-                            "is_doctor_search": True
-                        },
-                        "display_results": False,
-                        "doctor_count": 0
-                    }
-                
-                # Add count field for consistency
-                result['doctor_count'] = doctor_count
-                logger.info(f"TOOL DEBUG: Added count field with value {doctor_count}")
-                
-                return result
-            else:
-                logger.warning("Invalid data structure in result")
-                return {
-                    "response": {
-                        "message": "SEARCH_ERROR",
-                        "data": {"doctors": []},
-                        "is_doctor_search": True
-                    },
-                    "display_results": False,
-                    "doctor_count": 0
-                }
-        else:
-            logger.warning("No results returned from database")
-            return {
-                "response": {
-                    "message": "NO_DOCTORS_FOUND",
-                    "data": {"doctors": []},
-                    "is_doctor_search": True
+        # Build and execute query
+        query_result = build_query(SearchCriteria(**search_criteria))
+        
+        # Format the result
+        if isinstance(query_result, dict) and 'data' in query_result:
+            doctors = query_result['data'].get('doctors', [])
+            doctor_count = len(doctors)
+            logger.info(f"DOCTOR SEARCH: Found {doctor_count} doctors in result['data']['doctors']")
+            
+            # Create standardized result structure
+            result = {
+                'data': {
+                    'doctors': doctors,
+                    'count': doctor_count
                 },
-                "display_results": False,
-                "doctor_count": 0
+                'doctor_count': doctor_count
+            }
+            
+            logger.info(f"TOOL DEBUG: Search results keys: {list(result.keys())}")
+            logger.info(f"TOOL RESULT: Found {doctor_count} doctors")
+            return result
+        else:
+            logger.warning("DOCTOR SEARCH: No valid result structure found")
+            return {
+                'data': {
+                    'doctors': [],
+                    'count': 0
+                },
+                'doctor_count': 0
             }
             
     except Exception as e:
         logger.error(f"Error in unified_doctor_search: {str(e)}")
         return {
-            "response": {
-                "message": "UNEXPECTED_ERROR",
-                "data": {"doctors": []},
-                "is_doctor_search": True
+            'data': {
+                'doctors': [],
+                'count': 0
             },
-            "display_results": False,
-            "doctor_count": 0
+            'doctor_count': 0,
+            'error': str(e)
         }
 
 def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
@@ -529,8 +403,8 @@ def unified_doctor_search_tool(input_data: Union[str, Dict[str, Any]]) -> Dict[s
         
         if isinstance(search_results, dict):
             # Extract doctor data from the typical structure
-            if "response" in search_results and "data" in search_results["response"]:
-                doctor_list = search_results["response"]["data"]
+            if "data" in search_results and "doctors" in search_results["data"]:
+                doctor_list = search_results["data"]["doctors"]
                 doctor_count = len(doctor_list)
                 logger.info(f"TOOL DEBUG: Found {doctor_count} doctors in response.data")
         
@@ -540,12 +414,12 @@ def unified_doctor_search_tool(input_data: Union[str, Dict[str, Any]]) -> Dict[s
         thread_local.last_search_results = search_results
         
         # Return results with explicit doctor count
-        if isinstance(search_results, dict) and "response" in search_results:
-            response = search_results["response"]
+        if isinstance(search_results, dict) and "data" in search_results:
+            result = search_results["data"]
             # Add count for easier access
-            if not "count" in response and "data" in response:
-                response["count"] = len(response["data"])
-                logger.info(f"TOOL DEBUG: Added count field with value {response['count']}")
+            if not "count" in result and "doctors" in result:
+                result["count"] = len(result["doctors"])
+                logger.info(f"TOOL DEBUG: Added count field with value {result['count']}")
         
         return search_results
         

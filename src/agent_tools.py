@@ -150,6 +150,9 @@ def dynamic_doctor_search(user_query: str) -> Dict[str, Any]:
         lat = getattr(thread_local, 'latitude', None)
         long = getattr(thread_local, 'longitude', None)
         
+        # Remove environment variable fallback for coordinates
+        # Trust only the coordinates passed directly in the query or stored in thread_local
+        
         if lat is not None and long is not None:
             logger.info(f"Using coordinates from thread_local: lat={lat}, long={long}")
         
@@ -347,7 +350,9 @@ def dynamic_doctor_search(user_query: str) -> Dict[str, Any]:
         if lat is not None and long is not None:
             combined_criteria["latitude"] = lat
             combined_criteria["longitude"] = long
-            logger.info(f"Added coordinates to combined criteria: lat={lat}, long={long}")
+            logger.info(f"COORDINATES: Added coordinates to combined criteria: lat={lat}, long={long}")
+        else:
+            logger.warning(f"COORDINATES: No coordinates available for this search. Ensure the API passes lat/long with the user request.")
         
         # Always include the original query for context
         combined_criteria['original_message'] = user_query
