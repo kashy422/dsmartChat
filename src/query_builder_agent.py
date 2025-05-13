@@ -92,8 +92,8 @@ def build_query(criteria: SearchCriteria) -> Tuple[str, Dict[str, Any]]:
         if criteria.speciality:
             specialty_value = criteria.speciality.replace("'", "''")
             # Restore the N prefix for Unicode strings
-            where_conditions.append(f"AND le.Specialty = N'{specialty_value}'")
-            logger.info(f"Added specialty filter: le.Specialty = N'{specialty_value}'")
+            where_conditions.append(f"AND le.Specialty LIKE N'%{specialty_value}%'")
+            logger.info(f"Added specialty filter: le.Specialty LIKE N'%{specialty_value}%'")
             
             # Include subspecialty if provided
             if criteria.subspeciality:
