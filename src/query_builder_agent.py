@@ -245,8 +245,19 @@ def unified_doctor_search(input_data):
         - doctor_count: Number of doctors found
     """
     try:
-        # Extract search criteria and coordinates
+        # If input_data is a string, try to parse it as JSON
+        if isinstance(input_data, str):
+            try:
+                input_data = json.loads(input_data)
+            except json.JSONDecodeError:
+                logger.error("Failed to parse input data as JSON")
+                return {'data': {'doctors': [], 'count': 0}, 'doctor_count': 0}
+
+        # Extract search criteria - handle both nested and top-level cases
         search_criteria = input_data.get('search_criteria', {})
+        if not search_criteria:  # If no nested search_criteria, use the input_data itself
+            search_criteria = {k: v for k, v in input_data.items() if k not in ['latitude', 'longitude']}
+        
         latitude = input_data.get('latitude')
         longitude = input_data.get('longitude')
         
@@ -260,6 +271,9 @@ def unified_doctor_search(input_data):
                 search_criteria['latitude'] = float(latitude)
                 search_criteria['longitude'] = float(longitude)
                 logger.info(f"UNIFIED_SEARCH: Added coordinates to search criteria: lat={latitude}, long={longitude}")
+            
+            # Log the search criteria before conversion
+            logger.info(f"UNIFIED_SEARCH: Converting search criteria to SearchCriteria object: {search_criteria}")
             
             criteria = SearchCriteria(**search_criteria)
             logger.info(f"UNIFIED_SEARCH: Converted to SearchCriteria: {criteria.dict(exclude_none=True)}")
