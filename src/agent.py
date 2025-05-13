@@ -1804,12 +1804,9 @@ def chat_engine():
                                             }
                                             formatted_doctors.append(doc_info)
                                         
-                                        # Get the original user message to detect language
-                                        original_message = user_message if 'user_message' in locals() else function_args.get('user_message', '')
-                                        
                                         # Create the LLM prompt
                                         prompt = f"""
-                                        Based on a search for doctors, generate a response about the results.
+                                        Based on a search for doctors, I need to generate a natural, conversational response about the results.
                                         
                                         Search returned {doctor_count} doctors.
                                         
@@ -1820,27 +1817,27 @@ def chat_engine():
                                         Location: {patient_data.get('Location', '')}
                                         Health concern: {patient_data.get('Issue', '')}
                                         
+                                        Original user message: "{user_message}"
+                                        
                                         First few doctor results:
                                         {json.dumps(formatted_doctors, indent=2)}
                                         
-                                        Original user message: "{original_message}"
-                                        
-                                        INSTRUCTIONS:
-                                        1. IMPORTANT: Respond in the SAME LANGUAGE as the original user message
-                                        2. Keep your response extremely concise - single sentence if possible
-                                        3. No greetings, no addressing by name
-                                        4. JUST state: "Found [number] [type of doctors]" - for example "Found 5 dentists"
-                                        5. ONLY mention important distinguishing factors like gender distribution if critical
-                                        6. DO NOT mention ratings, experiences, fees, or other details unless explicitly requested
-                                        7. If no doctors were found, just state that no doctors were found in the area
-                                        8. Make the response sound natural in the target language
+                                        Generate a conversational, natural-sounding message to present these results to the patient.
+                                        IMPORTANT GUIDELINES:
+                                        1. Respond in the SAME LANGUAGE as the original user message
+                                        2. DO NOT include any greetings like "Hi" or "Hello" or the user's name at the beginning
+                                        3. Start directly with the information about found doctors
+                                        4. Keep the response concise and direct
+                                        5. Focus on being helpful by mentioning the number of doctors found and key information
+                                        6. The app interface will display the doctor details separately
+                                        7. If no doctors were found, provide a sympathetic response suggesting alternatives
                                         """
                                         
                                         # Call the OpenAI API to generate the response
                                         response = client.chat.completions.create(
                                             model="gpt-4o-mini-2024-07-18",  # Use the same model as the rest of the app
                                             messages=[
-                                                {"role": "system", "content": "You are a helpful medical assistant. Respond in the SAME LANGUAGE as the user's original message. Keep responses concise without greetings."},
+                                                {"role": "system", "content": "You are a helpful medical assistant providing information about doctor search results. MATCH THE LANGUAGE OF THE USER'S ORIGINAL MESSAGE."},
                                                 {"role": "user", "content": prompt}
                                             ],
                                             temperature=0.7,
@@ -2100,17 +2097,9 @@ def chat_engine():
                                     }
                                     formatted_doctors.append(doc_info)
                                 
-                                # Get the original user message from history
-                                original_message = ""
-                                if history.messages and len(history.messages) > 0:
-                                    for msg in reversed(history.messages):
-                                        if msg.get('type') == 'human':
-                                            original_message = msg.get('content', '')
-                                            break
-                                
                                 # Create the LLM prompt
                                 prompt = f"""
-                                Based on a search for doctors, generate a response about the results.
+                                Based on a search for doctors, I need to generate a natural, conversational response about the results.
                                 
                                 Search returned {len(doctors_data)} doctors.
                                 
@@ -2121,27 +2110,27 @@ def chat_engine():
                                 Location: {patient_data.get('Location', '')}
                                 Health concern: {patient_data.get('Issue', '')}
                                 
+                                Original user message: "{user_message}"
+                                
                                 First few doctor results:
                                 {json.dumps(formatted_doctors, indent=2)}
                                 
-                                Original user message: "{original_message}"
-                                
-                                INSTRUCTIONS:
-                                1. IMPORTANT: Respond in the SAME LANGUAGE as the original user message
-                                2. Keep your response extremely concise - single sentence if possible
-                                3. No greetings, no addressing by name
-                                4. JUST state: "Found [number] [type of doctors]" - for example "Found 5 dentists"
-                                5. ONLY mention important distinguishing factors like gender distribution if critical
-                                6. DO NOT mention ratings, experiences, fees, or other details unless explicitly requested
-                                7. If no doctors were found, just state that no doctors were found in the area
-                                8. Make the response sound natural in the target language
+                                Generate a conversational, natural-sounding message to present these results to the patient.
+                                IMPORTANT GUIDELINES:
+                                1. Respond in the SAME LANGUAGE as the original user message
+                                2. DO NOT include any greetings like "Hi" or "Hello" or the user's name at the beginning
+                                3. Start directly with the information about found doctors
+                                4. Keep the response concise and direct
+                                5. Focus on being helpful by mentioning the number of doctors found and key information
+                                6. The app interface will display the doctor details separately
+                                7. If no doctors were found, provide a sympathetic response suggesting alternatives
                                 """
                                 
                                 # Call the OpenAI API to generate the response
                                 response = client.chat.completions.create(
                                     model="gpt-4o-mini-2024-07-18",  # Use the same model as the rest of the app
                                     messages=[
-                                        {"role": "system", "content": "You are a helpful medical assistant. Respond in the SAME LANGUAGE as the user's original message. Keep responses concise without greetings."},
+                                        {"role": "system", "content": "You are a helpful medical assistant providing information about doctor search results. MATCH THE LANGUAGE OF THE USER'S ORIGINAL MESSAGE."},
                                         {"role": "user", "content": prompt}
                                     ],
                                     temperature=0.7,
