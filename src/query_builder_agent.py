@@ -90,27 +90,36 @@ def build_query(criteria: SearchCriteria) -> Tuple[str, Dict[str, Any]]:
         
         # Specialty search
         if criteria.speciality:
-            specialty_value = criteria.speciality.replace("'", "''")
-            # Restore the N prefix for Unicode strings
-            where_conditions.append(f"AND le.Specialty LIKE N'%{specialty_value}%'")
-            logger.info(f"Added specialty filter: le.Specialty LIKE N'%{specialty_value}%'")
-            
-            # Include subspecialty if provided
             if criteria.subspeciality:
-                subspecialties = [s.strip() for s in criteria.subspeciality.split(',')] if ',' in criteria.subspeciality else [criteria.subspeciality]
-                
-                # Create properly formatted IN clause for subspecialties using ds.Subspecialities
-                # Add N prefix for Unicode strings
-                subspecialties_list = []
-                for sub in subspecialties:
-                    # Properly escape single quotes for SQL
-                    escaped_sub = sub.replace("'", "''")
-                    subspecialties_list.append(f"N'{escaped_sub}'")
-                
-                # Join with commas for the IN clause
-                subspecialties_str = ", ".join(subspecialties_list)
-                where_conditions.append(f"AND ds.Subspecialities IN ({subspecialties_str})")
-                logger.info(f"Added subspecialty filter using IN clause: ds.Subspecialities IN ({subspecialties_str})")
+
+                # Special case for Dentistry
+                specialty_value = criteria.speciality.replace("'", "''")
+                # Restore the N prefix for Unicode strings
+                where_conditions.append(f"AND le.Specialty LIKE N'%{specialty_value}%'")
+                logger.info(f"Added specialty filter: le.Specialty LIKE N'%{specialty_value}%'")
+            else:
+                # If no subspecialty, we can use the specialty directly
+                specialty_value = criteria.speciality.replace("'", "''")
+                # Restore the N prefix for Unicode strings
+                where_conditions.append(f"AND (le.Specialty LIKE N'%{specialty_value}%' OR ds.Subspecialities LIKE N'%{specialty_value}%')")
+                logger.info(f"AND (le.Specialty LIKE N'%{specialty_value}%' OR ds.Subspecialities LIKE N'%{specialty_value}%')")
+            
+        # Include subspecialty if provided
+        if criteria.subspeciality:
+            subspecialties = [s.strip() for s in criteria.subspeciality.split(',')] if ',' in criteria.subspeciality else [criteria.subspeciality]
+            
+            # Create properly formatted IN clause for subspecialties using ds.Subspecialities
+            # Add N prefix for Unicode strings
+            subspecialties_list = []
+            for sub in subspecialties:
+                # Properly escape single quotes for SQL
+                escaped_sub = sub.replace("'", "''")
+                subspecialties_list.append(f"N'{escaped_sub}'")
+            
+            # Join with commas for the IN clause
+            subspecialties_str = ", ".join(subspecialties_list)
+            where_conditions.append(f"AND ds.Subspecialities IN ({subspecialties_str})")
+            logger.info(f"Added subspecialty filter using IN clause: ds.Subspecialities IN ({subspecialties_str})")
         
         # Rating filter
         if criteria.min_rating is not None:
