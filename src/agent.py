@@ -539,17 +539,16 @@ def validate_doctor_result(result, patient_data=None, json_requested=True):
                 doctor_count = len(doctors_data)
                 logger.info(f"VALIDATION: Found {doctor_count} doctors in data.doctors")
     
-    # Get the LLM's response from the result
-    message = ""
+    # Get the raw message from the result but we'll mark it as raw
+    raw_message = ""
     if isinstance(result, dict) and "response" in result and isinstance(result["response"], dict):
-        message = result["response"].get("message", "")
+        raw_message = result["response"].get("message", "")
     
-    # If no message was found, create a default message based on the results
-    if not message:
-        if doctor_count > 0:
-            message = f"I found {doctor_count} doctors matching your criteria. Here are the details:"
-        else:
-            message = "I couldn't find any doctors matching your criteria. Would you like to try a different search?"
+    # Create a default message based on the results (as a placeholder - will be replaced by LLM)
+    if doctor_count > 0:
+        message = f"I found {doctor_count} doctors matching your criteria. Here are the details:"
+    else:
+        message = "I couldn't find any doctors matching your criteria. Would you like to try a different search?"
     
     # Ensure patient data is properly formatted
     formatted_patient_data = patient_data or {"session_id": getattr(thread_local, 'session_id', '')}
@@ -558,9 +557,11 @@ def validate_doctor_result(result, patient_data=None, json_requested=True):
     response = {
         "response": {
             "message": message,
+            "raw_message": raw_message,  # Keep the raw message for context
             "patient": formatted_patient_data,
             "data": doctors_data,  # Include the doctors data directly
-            "is_doctor_search": True
+            "is_doctor_search": True,
+            "needs_llm_processing": True  # Flag to indicate we need LLM processing for the message
         },
         "display_results": doctor_count > 0,
         "doctor_count": doctor_count
@@ -616,7 +617,7 @@ def simplify_doctor_message(response_object, logger):
     if not isinstance(doctor_data, list):
         return response_object
     
-    # Get the current message from the LLM
+    # Get the current message from the LLM (if already processed) or use the generated one
     message = response_dict.get("message", "")
     if not message:
         return response_object
@@ -635,6 +636,11 @@ def simplify_doctor_message(response_object, logger):
             doctor_count = len(doctor_data)
             response_object["response"]["message"] = f"I've found matching doctors in your area"
             logger.info(f"🔄 Using simple acknowledgment message")
+    
+    # If we need LLM processing, mark response_object to indicate this
+    if response_dict.get("needs_llm_processing", False):
+        response_object["needs_llm_processing"] = True
+        logger.info(f"🔄 Marked response for LLM message processing")
     
     # Set the data directly in the response
     response_object["response"]["data"] = doctor_data
@@ -1766,31 +1772,113 @@ def chat_engine():
 
                                     print("VALIDATED RESULT AGENT 1763: ", validated_result)
                                     
-                                    # Get the LLM's response from the validated result
-                                    if isinstance(validated_result, dict) and isinstance(validated_result.get("response"), dict):
-                                        ai_message = validated_result["response"].get("message", "")
-                                        
-                                        # Add the AI response to history
-                                        history.add_ai_message(ai_message)
-                                        
-                                        print("SEARCH RESULT AGENT 1770: ", search_result)
-                                        # Create final response object with the LLM response from query_builder_agent
-                                        final_response = {
-                                            "response": {
-                                                "message": ai_message,  # Use the LLM response directly from query_builder_agent
-                                                "patient": history.get_patient_data() or {"session_id": session_id},
-                                                "data": validated_result["response"]["data"],  # Use the data from validated_result
-                                                "is_doctor_search": True
-                                            },
-                                            "display_results": len(validated_result["response"]["data"]) > 0,
-                                            "doctor_count": len(validated_result["response"]["data"])
-                                        }
-                                        
-                                        # IMPORTANT: Clear symptom_analysis from thread_local after doctor search
-                                        clear_symptom_analysis("after direct doctor search", session_id)
-                                        
-                                        return final_response
+                                    # Get the doctor data and count from the validated result
+                                    doctor_count = 0
+                                    doctor_data = []
                                     
+                                    if isinstance(validated_result, dict) and isinstance(validated_result.get("response"), dict):
+                                        response_data = validated_result["response"]
+                                        if "data" in response_data:
+                                            data_field = response_data["data"]
+                                            if isinstance(data_field, list):
+                                                doctor_data = data_field
+                                                doctor_count = len(doctor_data)
+                                            elif isinstance(data_field, dict) and "doctors" in data_field:
+                                                doctor_data = data_field["doctors"]
+                                                doctor_count = len(doctor_data)
+                                    
+                                    # Use LLM to generate a natural response based on the doctor data
+                                    try:
+                                        logger.info(f"🧠 Generating LLM response for {doctor_count} doctors")
+                                        
+                                        # Format doctor data for the LLM in a more concise way
+                                        formatted_doctors = []
+                                        for i, doctor in enumerate(doctor_data[:5]):  # Limit to first 5 for the prompt
+                                            doc_info = {
+                                                "name": doctor.get("DocName_en", "Unknown"),
+                                                "specialty": doctor.get("Specialty", ""),
+                                                "hospital": doctor.get("BranchName_en", ""),
+                                                "rating": doctor.get("Rating", ""),
+                                                "fee": doctor.get("Fee", ""),
+                                                "gender": doctor.get("Gender", "")
+                                            }
+                                            formatted_doctors.append(doc_info)
+                                        
+                                        # Get the original user message to detect language
+                                        original_message = user_message if 'user_message' in locals() else function_args.get('user_message', '')
+                                        
+                                        # Create the LLM prompt
+                                        prompt = f"""
+                                        Based on a search for doctors, generate a response about the results.
+                                        
+                                        Search returned {doctor_count} doctors.
+                                        
+                                        Patient info:
+                                        Name: {patient_data.get('Name', 'the patient')}
+                                        Gender: {patient_data.get('Gender', '')}
+                                        Age: {patient_data.get('Age', '')}
+                                        Location: {patient_data.get('Location', '')}
+                                        Health concern: {patient_data.get('Issue', '')}
+                                        
+                                        First few doctor results:
+                                        {json.dumps(formatted_doctors, indent=2)}
+                                        
+                                        Original user message: "{original_message}"
+                                        
+                                        INSTRUCTIONS:
+                                        1. IMPORTANT: Respond in the SAME LANGUAGE as the original user message
+                                        2. Keep your response extremely concise - single sentence if possible
+                                        3. No greetings, no addressing by name
+                                        4. JUST state: "Found [number] [type of doctors]" - for example "Found 5 dentists"
+                                        5. ONLY mention important distinguishing factors like gender distribution if critical
+                                        6. DO NOT mention ratings, experiences, fees, or other details unless explicitly requested
+                                        7. If no doctors were found, just state that no doctors were found in the area
+                                        8. Make the response sound natural in the target language
+                                        """
+                                        
+                                        # Call the OpenAI API to generate the response
+                                        response = client.chat.completions.create(
+                                            model="gpt-4o-mini-2024-07-18",  # Use the same model as the rest of the app
+                                            messages=[
+                                                {"role": "system", "content": "You are a helpful medical assistant. Respond in the SAME LANGUAGE as the user's original message. Keep responses concise without greetings."},
+                                                {"role": "user", "content": prompt}
+                                            ],
+                                            temperature=0.7,
+                                            max_tokens=250  # Limit the response length
+                                        )
+                                        
+                                        # Extract the generated message
+                                        generated_message = response.choices[0].message.content.strip()
+                                        logger.info(f"🧠 Generated LLM message for doctor search: {generated_message}")
+                                        
+                                        # Use the generated message instead of the hardcoded one
+                                        ai_message = generated_message
+                                    except Exception as e:
+                                        logger.error(f"❌ Error generating LLM response for doctor search: {str(e)}", exc_info=True)
+                                        # Fallback to original message from query_builder
+                                        ai_message = validated_result["response"].get("message", "")
+                                        logger.info(f"Using fallback message from query_builder: {ai_message}")
+                                        
+                                    # Add the AI response to history
+                                    history.add_ai_message(ai_message)
+                                    
+                                    print("SEARCH RESULT AGENT 1770: ", search_result)
+                                    # Create final response object with the LLM-generated message
+                                    final_response = {
+                                        "response": {
+                                            "message": ai_message,  # Use the LLM-generated response
+                                            "patient": history.get_patient_data() or {"session_id": session_id},
+                                            "data": validated_result["response"]["data"],  # Use the data from validated_result
+                                            "is_doctor_search": True
+                                        },
+                                        "display_results": len(validated_result["response"]["data"]) > 0,
+                                        "doctor_count": len(validated_result["response"]["data"])
+                                    }
+                                    
+                                    # IMPORTANT: Clear symptom_analysis from thread_local after doctor search
+                                    clear_symptom_analysis("after direct doctor search", session_id)
+                                    
+                                    return final_response
                                 except Exception as e:
                                     logger.error(f"❌ Error in doctor search: {str(e)}")
                                     messages.append({
@@ -1995,10 +2083,87 @@ def chat_engine():
                             
                             logger.info(f"Final response: Found {len(doctors_data)} doctors to include in response")
                             
-                            # Create response with doctor data
+                            # Use LLM to generate a custom response based on the doctor data
+                            try:
+                                logger.info(f"🧠 Generating custom LLM response for {len(doctors_data)} doctors")
+                                
+                                # Format doctor data for the LLM in a more concise way
+                                formatted_doctors = []
+                                for i, doctor in enumerate(doctors_data[:5]):  # Limit to first 5 for the prompt
+                                    doc_info = {
+                                        "name": doctor.get("DocName_en", "Unknown"),
+                                        "specialty": doctor.get("Specialty", ""),
+                                        "hospital": doctor.get("BranchName_en", ""),
+                                        "rating": doctor.get("Rating", ""),
+                                        "fee": doctor.get("Fee", ""),
+                                        "gender": doctor.get("Gender", "")
+                                    }
+                                    formatted_doctors.append(doc_info)
+                                
+                                # Get the original user message from history
+                                original_message = ""
+                                if history.messages and len(history.messages) > 0:
+                                    for msg in reversed(history.messages):
+                                        if msg.get('type') == 'human':
+                                            original_message = msg.get('content', '')
+                                            break
+                                
+                                # Create the LLM prompt
+                                prompt = f"""
+                                Based on a search for doctors, generate a response about the results.
+                                
+                                Search returned {len(doctors_data)} doctors.
+                                
+                                Patient info:
+                                Name: {patient_data.get('Name', 'the patient')}
+                                Gender: {patient_data.get('Gender', '')}
+                                Age: {patient_data.get('Age', '')}
+                                Location: {patient_data.get('Location', '')}
+                                Health concern: {patient_data.get('Issue', '')}
+                                
+                                First few doctor results:
+                                {json.dumps(formatted_doctors, indent=2)}
+                                
+                                Original user message: "{original_message}"
+                                
+                                INSTRUCTIONS:
+                                1. IMPORTANT: Respond in the SAME LANGUAGE as the original user message
+                                2. Keep your response extremely concise - single sentence if possible
+                                3. No greetings, no addressing by name
+                                4. JUST state: "Found [number] [type of doctors]" - for example "Found 5 dentists"
+                                5. ONLY mention important distinguishing factors like gender distribution if critical
+                                6. DO NOT mention ratings, experiences, fees, or other details unless explicitly requested
+                                7. If no doctors were found, just state that no doctors were found in the area
+                                8. Make the response sound natural in the target language
+                                """
+                                
+                                # Call the OpenAI API to generate the response
+                                response = client.chat.completions.create(
+                                    model="gpt-4o-mini-2024-07-18",  # Use the same model as the rest of the app
+                                    messages=[
+                                        {"role": "system", "content": "You are a helpful medical assistant. Respond in the SAME LANGUAGE as the user's original message. Keep responses concise without greetings."},
+                                        {"role": "user", "content": prompt}
+                                    ],
+                                    temperature=0.7,
+                                    max_tokens=250  # Limit the response length
+                                )
+                                
+                                # Extract the generated message
+                                generated_message = response.choices[0].message.content.strip()
+                                logger.info(f"🧠 Generated custom LLM message: {generated_message}")
+                                
+                                # Use the generated message instead of the LLM's final message
+                                custom_message = generated_message
+                            except Exception as e:
+                                logger.error(f"❌ Error generating custom LLM response: {str(e)}", exc_info=True)
+                                # Fallback to original message from LLM
+                                custom_message = final_message.content
+                                logger.info(f"Using fallback message from LLM: {custom_message[:100]}...")
+                            
+                            # Create response with doctor data and custom message
                             return {
                                 "response": {
-                                    "message": final_message.content,
+                                    "message": custom_message,
                                     "patient": patient_data or {"session_id": session_id},
                                     "data": doctors_data,
                                     "is_doctor_search": True
