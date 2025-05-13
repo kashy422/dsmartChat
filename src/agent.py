@@ -515,29 +515,29 @@ def validate_doctor_result(result, patient_data=None, json_requested=True):
     # Initialize with defaults
     doctor_count = 0
     doctors_data = []
-    # print("RESULT IN AGENT 518: ", result)
+    print("RESULT IN AGENT 518: ", result)
+    
     # Extract data from various formats
     if isinstance(result, dict):
-        # First try to get from data.doctors
-        if "data" in result and isinstance(result["data"], dict):
+        # First try response.data.doctors
+        if "response" in result and isinstance(result["response"], dict):
+            response_data = result["response"]
+            if "data" in response_data:
+                if isinstance(response_data["data"], dict) and "doctors" in response_data["data"]:
+                    doctors_data = response_data["data"]["doctors"]
+                    doctor_count = len(doctors_data)
+                    logger.info(f"VALIDATION: Found {doctor_count} doctors in response.data.doctors")
+                elif isinstance(response_data["data"], list):
+                    doctors_data = response_data["data"]
+                    doctor_count = len(doctors_data)
+                    logger.info(f"VALIDATION: Found {doctor_count} doctors in response.data")
+        # Then try data.doctors
+        elif "data" in result and isinstance(result["data"], dict):
             data = result["data"]
             if "doctors" in data:
                 doctors_data = data["doctors"]
                 doctor_count = len(doctors_data)
                 logger.info(f"VALIDATION: Found {doctor_count} doctors in data.doctors")
-        # Then try response.data
-        elif "response" in result and isinstance(result["response"], dict):
-            response_data = result["response"]
-            if "data" in response_data:
-                if isinstance(response_data["data"], list):
-                    doctors_data = response_data["data"]
-                    doctor_count = len(doctors_data)
-                    logger.info(f"VALIDATION: Found {doctor_count} doctors in response.data")
-                elif isinstance(response_data["data"], dict) and "doctors" in response_data["data"]:
-                    doctors_data = response_data["data"]["doctors"]
-                    doctor_count = len(doctors_data)
-                    
-                    logger.info(f"VALIDATION: Found {doctor_count} doctors in response.data.doctors")
     
     # Get the LLM's response from the result
     message = ""
@@ -553,19 +553,23 @@ def validate_doctor_result(result, patient_data=None, json_requested=True):
     
     # Ensure patient data is properly formatted
     formatted_patient_data = patient_data or {"session_id": getattr(thread_local, 'session_id', '')}
-    # print("DOCOTR DATS IN AGENT 557: ", doctors_data)
-
-    response = {"response": {
-            "message": "message here",
+    
+    # Create the response with the doctors data
+    response = {
+        "response": {
+            "message": message,
             "patient": formatted_patient_data,
             "data": doctors_data,  # Include the doctors data directly
             "is_doctor_search": True
         },
         "display_results": doctor_count > 0,
-        "doctor_count": doctor_count}
-
-    print("RESPONSE AGENT 567: ", response)
-    # Return the validated result with the doctors data
+        "doctor_count": doctor_count
+    }
+    
+    logger.info(f"VALIDATION: Creating response with {doctor_count} doctors")
+    logger.info(f"VALIDATION: Response structure: {response}")
+    logger.info(f"VALIDATION: Returning validated result")
+    
     return response
 
 def simplify_doctor_message(response_object, logger):
@@ -1138,11 +1142,11 @@ def chat_engine():
                             "response": {
                                 "message": ai_message,  # Use the LLM response directly from query_builder_agent
                                 "patient": history.get_patient_data() or {"session_id": session_id},
-                                "data": doctor_data,
+                                "data": validated_result["response"]["data"],  # Use the data from validated_result
                                 "is_doctor_search": True
                             },
-                            "display_results": doctor_count > 0,
-                            "doctor_count": doctor_count
+                            "display_results": len(validated_result["response"]["data"]) > 0,
+                            "doctor_count": len(validated_result["response"]["data"])
                         }
                         
                         # IMPORTANT: Clear symptom_analysis from thread_local after doctor search
@@ -1775,15 +1779,15 @@ def chat_engine():
                                             "response": {
                                                 "message": ai_message,  # Use the LLM response directly from query_builder_agent
                                                 "patient": history.get_patient_data() or {"session_id": session_id},
-                                                "data": search_result.get("data", {}).get("doctors", []),
+                                                "data": validated_result["response"]["data"],  # Use the data from validated_result
                                                 "is_doctor_search": True
                                             },
-                                            "display_results": len(search_result.get("data", {}).get("doctors", [])) > 0,
-                                            "doctor_count": len(search_result.get("data", {}).get("doctors", []))
+                                            "display_results": len(validated_result["response"]["data"]) > 0,
+                                            "doctor_count": len(validated_result["response"]["data"])
                                         }
                                         
                                         # IMPORTANT: Clear symptom_analysis from thread_local after doctor search
-                                        clear_symptom_analysis("after doctor search", session_id)
+                                        clear_symptom_analysis("after direct doctor search", session_id)
                                         
                                         return final_response
                                     
