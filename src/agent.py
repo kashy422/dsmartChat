@@ -515,92 +515,58 @@ def validate_doctor_result(result, patient_data=None, json_requested=True):
     # Initialize with defaults
     doctor_count = 0
     doctors_data = []
-    
+    # print("RESULT IN AGENT 518: ", result)
     # Extract data from various formats
     if isinstance(result, dict):
-        if "response" in result and isinstance(result["response"], dict):
-            # Handle response format
-            response_data = result["response"]
-            doctors_data = response_data.get("data", [])
-            doctor_count = len(doctors_data)
-        elif "data" in result and isinstance(result["data"], dict):
-            # Handle data format
+        # First try to get from data.doctors
+        if "data" in result and isinstance(result["data"], dict):
             data = result["data"]
-            doctors_data = data.get("doctors", [])
-            doctor_count = data.get("count", len(doctors_data))
+            if "doctors" in data:
+                doctors_data = data["doctors"]
+                doctor_count = len(doctors_data)
+                logger.info(f"VALIDATION: Found {doctor_count} doctors in data.doctors")
+        # Then try response.data
+        elif "response" in result and isinstance(result["response"], dict):
+            response_data = result["response"]
+            if "data" in response_data:
+                if isinstance(response_data["data"], list):
+                    doctors_data = response_data["data"]
+                    doctor_count = len(doctors_data)
+                    logger.info(f"VALIDATION: Found {doctor_count} doctors in response.data")
+                elif isinstance(response_data["data"], dict) and "doctors" in response_data["data"]:
+                    doctors_data = response_data["data"]["doctors"]
+                    doctor_count = len(doctors_data)
+                    
+                    logger.info(f"VALIDATION: Found {doctor_count} doctors in response.data.doctors")
     
     # Get the LLM's response from the result
     message = ""
     if isinstance(result, dict) and "response" in result and isinstance(result["response"], dict):
         message = result["response"].get("message", "")
-        
-        # Get the original message to detect language
-        original_message = ""
-        if isinstance(result, dict):
-            if "criteria" in result and isinstance(result["criteria"], dict):
-                original_message = result["criteria"].get("original_message", "")
-            elif "response" in result and isinstance(result["response"], dict):
-                original_message = result["response"].get("original_message", "")
-        
-        # Handle special messages using the main chat engine's context
-        if message in ["NO_SPECIALTY_FOUND", "NO_DOCTORS_FOUND", "SEARCH_ERROR", "UNEXPECTED_ERROR"]:
-            try:
-                # Get the current session history
-                session_id = getattr(thread_local, 'session_id', '')
-                history = get_session_history(session_id)
-                
-                # Create a context-aware prompt based on the error type
-                error_context = {
-                    "NO_SPECIALTY_FOUND": "The user has searched for a medical specialty that we don't have available yet. Please acknowledge their search and explain we are actively expanding our network of doctors and specialists.",
-                    "NO_DOCTORS_FOUND": "The user's search for doctors in their specified specialty and location returned no results. Please acknowledge their search and explain we are actively expanding our network of doctors in their area.",
-                    "SEARCH_ERROR": "There was an error searching for doctors. Please acknowledge the issue and suggest what they can do next.",
-                    "UNEXPECTED_ERROR": "An unexpected error occurred. Please acknowledge the issue and suggest what they can do next."
-                }
-                
-                # Get the current messages from history, filtering out tool calls and null content
-                messages = []
-                for msg in history.messages:
-                    if msg['type'] == 'human' and msg.get('content'):
-                        messages.append({"role": "user", "content": msg['content']})
-                    elif msg['type'] == 'ai' and msg.get('content'):
-                        messages.append({"role": "assistant", "content": msg['content']})
-                
-                # If we have no valid messages, create a basic context
-                if not messages:
-                    messages = [
-                        {"role": "system", "content": "You are a medical assistant. Provide responses in a professional but warm tone."},
-                        {"role": "user", "content": original_message or "Hello"}
-                    ]
-                
-                # Add the error context as a new user message
-                messages.append({"role": "user", "content": error_context[message]})
-                
-                # Get response from the main chat engine
-                response = client.chat.completions.create(
-                    model="gpt-4o-mini-2024-07-18",
-                    messages=messages
-                )
-                message = response.choices[0].message.content
-                
-            except Exception as e:
-                logger.error(f"Error generating response from chat history: {str(e)}")
-                # Fallback to a simple message if there's an error
-                message = "I apologize, but I couldn't find any matching results. Please try a different search term or location."
+    
+    # If no message was found, create a default message based on the results
+    if not message:
+        if doctor_count > 0:
+            message = f"I found {doctor_count} doctors matching your criteria. Here are the details:"
+        else:
+            message = "I couldn't find any doctors matching your criteria. Would you like to try a different search?"
     
     # Ensure patient data is properly formatted
     formatted_patient_data = patient_data or {"session_id": getattr(thread_local, 'session_id', '')}
-    
-    # Return the validated result
-    return {
-        "response": {
-            "message": message,
+    # print("DOCOTR DATS IN AGENT 557: ", doctors_data)
+
+    response = {"response": {
+            "message": "message here",
             "patient": formatted_patient_data,
-            "data": doctors_data,
+            "data": doctors_data,  # Include the doctors data directly
             "is_doctor_search": True
         },
         "display_results": doctor_count > 0,
-        "doctor_count": doctor_count
-    }
+        "doctor_count": doctor_count}
+
+    print("RESPONSE AGENT 567: ", response)
+    # Return the validated result with the doctors data
+    return response
 
 def simplify_doctor_message(response_object, logger):
     """
@@ -1140,6 +1106,7 @@ def chat_engine():
                         # Process results
                         doctor_data = []
                         doctor_count = 0
+                        print("VALIDATED RESULT 1109 AGENT: ", validated_result)
                         
                         if isinstance(validated_result, dict) and isinstance(validated_result.get("response"), dict):
                             response_data = validated_result["response"]
@@ -1165,6 +1132,7 @@ def chat_engine():
                         # Store the search result
                         history.add_tool_execution("search_doctors_dynamic", validated_result)
                         
+                        print("DOCTOR DATA 1134 AGENT: ", doctor_data)
                         # Create final response object with the LLM response from query_builder_agent
                         final_response = {
                             "response": {
@@ -1791,6 +1759,8 @@ def chat_engine():
                                         "tool_call_id": tool_call.id,
                                         "name": function_name
                                     })
+
+                                    print("VALIDATED RESULT AGENT 1763: ", validated_result)
                                     
                                     # Get the LLM's response from the validated result
                                     if isinstance(validated_result, dict) and isinstance(validated_result.get("response"), dict):
@@ -1799,6 +1769,7 @@ def chat_engine():
                                         # Add the AI response to history
                                         history.add_ai_message(ai_message)
                                         
+                                        print("SEARCH RESULT AGENT 1770: ", search_result)
                                         # Create final response object with the LLM response from query_builder_agent
                                         final_response = {
                                             "response": {
@@ -1988,6 +1959,7 @@ def chat_engine():
                         if doctor_search_result:
                             # Extract doctor data
                             doctors_data = []
+                            logger.info("DOCTOR_SEARCH_RESULT: {doctor_search_result}")
                             if isinstance(doctor_search_result, dict):
                                 logger.info(f"Doctor search result keys: {list(doctor_search_result.keys())}")
                                 # First try to get from response.data.doctors
@@ -1999,6 +1971,7 @@ def chat_engine():
                                         logger.info(f"Data field type: {type(data_field)}")
                                         if isinstance(data_field, dict) and "doctors" in data_field:
                                             doctors_data = data_field["doctors"]
+                                            logger.info("")
                                             logger.info(f"Found {len(doctors_data)} doctors in response.data.doctors")
                                         elif isinstance(data_field, list):
                                             doctors_data = data_field

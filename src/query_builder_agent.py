@@ -148,8 +148,16 @@ def build_query(criteria: SearchCriteria) -> Tuple[str, Dict[str, Any]]:
         
         logger.info(f"Using coordinates: Lat={params['@Latitude']}, Long={params['@Longitude']}")
         
+        # Execute the stored procedure and log the results
+        sp_name = "[dbo].[SpDyamicQueryBuilderLatLng]"
+        logger.info(f"Executing stored procedure: {sp_name}")
+        logger.info(f"With parameters: {params}")
+        
+        result = db.execute_stored_procedure(sp_name, params)
+        logger.info(f"Database returned result: {json.dumps(result, indent=2)}")
+        
         # Return stored procedure name and parameters
-        return "[dbo].[SpDyamicQueryBuilderLatLng]", params
+        return result
         
     except Exception as e:
         logger.error(f"Error building query: {str(e)}")
@@ -224,53 +232,56 @@ def normalize_specialty(specialty_name: str) -> dict:
     logger.info(f"SPECIALTY: No mapping found for '{specialty_name}', keeping as is")
     return {"specialty": specialty_name}
 
-def unified_doctor_search(input_data: dict) -> dict:
+def unified_doctor_search(input_data):
+    """
+    Unified function to search for doctors based on input data
+    
+    Args:
+        input_data: Dictionary containing search parameters
+        
+    Returns:
+        dict with keys:
+        - data: Dictionary containing doctors list and count
+        - doctor_count: Number of doctors found
+    """
     try:
-        logger.info(f"DOCTOR SEARCH: Starting unified search with input: {input_data}")
+        # Extract search criteria and coordinates
+        search_criteria = input_data.get('search_criteria', {})
+        latitude = input_data.get('latitude')
+        longitude = input_data.get('longitude')
         
-        # Extract coordinates
-        lat = input_data.get('latitude')
-        long = input_data.get('longitude')
-        if lat and long:
-            logger.info(f"DOCTOR SEARCH: Using coordinates from input data: lat={lat}, long={long}")
+        logger.info(f"UNIFIED_SEARCH: Processing search criteria: {search_criteria}")
+        logger.info(f"UNIFIED_SEARCH: Coordinates - lat: {latitude}, long: {longitude}")
         
-        # Build search criteria
-        search_criteria = {
-            'latitude': lat,
-            'longitude': long,
-            'original_message': input_data.get('user_message', '')
-        }
-        
-        # Add any other criteria from input_data
-        for key, value in input_data.items():
-            if key not in ['latitude', 'longitude', 'user_message'] and value is not None:
-                search_criteria[key] = value
-        
-        logger.info(f"DOCTOR SEARCH: Final search criteria: {search_criteria}")
-        
-        # Build and execute query
-        query_result = build_query(SearchCriteria(**search_criteria))
-        
-        # Format the result
-        if isinstance(query_result, dict) and 'data' in query_result:
-            doctors = query_result['data'].get('doctors', [])
-            doctor_count = len(doctors)
-            logger.info(f"DOCTOR SEARCH: Found {doctor_count} doctors in result['data']['doctors']")
+        # Convert dictionary to SearchCriteria object
+        try:
+            # Ensure coordinates are included in the criteria
+            if latitude is not None and longitude is not None:
+                search_criteria['latitude'] = float(latitude)
+                search_criteria['longitude'] = float(longitude)
+                logger.info(f"UNIFIED_SEARCH: Added coordinates to search criteria: lat={latitude}, long={longitude}")
             
-            # Create standardized result structure
-            result = {
-                'data': {
-                    'doctors': doctors,
-                    'count': doctor_count
-                },
-                'doctor_count': doctor_count
-            }
-            
-            logger.info(f"TOOL DEBUG: Search results keys: {list(result.keys())}")
-            logger.info(f"TOOL RESULT: Found {doctor_count} doctors")
-            return result
-        else:
-            logger.warning("DOCTOR SEARCH: No valid result structure found")
+            criteria = SearchCriteria(**search_criteria)
+            logger.info(f"UNIFIED_SEARCH: Converted to SearchCriteria: {criteria.dict(exclude_none=True)}")
+        except Exception as e:
+            logger.error(f"UNIFIED_SEARCH: Error converting to SearchCriteria: {str(e)}")
+            # If conversion fails, try to extract specialty from user_message
+            if isinstance(input_data, dict) and 'user_message' in input_data:
+                user_message = input_data['user_message']
+                extracted = extract_search_criteria_from_message(user_message)
+                # Add coordinates to extracted criteria
+                if latitude is not None and longitude is not None:
+                    extracted['latitude'] = float(latitude)
+                    extracted['longitude'] = float(longitude)
+                criteria = SearchCriteria(**extracted)
+                logger.info(f"UNIFIED_SEARCH: Created SearchCriteria from user message: {criteria.dict(exclude_none=True)}")
+            else:
+                raise ValueError("Could not create SearchCriteria from input data")
+        
+        # Build the query
+        query_result = build_query(criteria)
+        if not query_result:
+            logger.warning("UNIFIED_SEARCH: No query result returned")
             return {
                 'data': {
                     'doctors': [],
@@ -279,15 +290,34 @@ def unified_doctor_search(input_data: dict) -> dict:
                 'doctor_count': 0
             }
             
+        # Extract doctors and count
+        doctors = query_result.get('data', [])
+        doctor_count = len(doctors)
+        logger.info(f"UNIFIED_SEARCH: Found {doctor_count} doctors")
+        
+        # Format the result
+        result = {
+            'data': {
+                'doctors': doctors,
+                'count': doctor_count
+            },
+            'doctor_count': doctor_count
+        }
+        
+        # Log the result structure
+        logger.info(f"UNIFIED_SEARCH: Returning result with {doctor_count} doctors")
+        logger.debug(f"UNIFIED_SEARCH: Result structure: {result}")
+        
+        return result
+        
     except Exception as e:
-        logger.error(f"Error in unified_doctor_search: {str(e)}")
+        logger.error(f"UNIFIED_SEARCH: Error in unified_doctor_search: {str(e)}")
         return {
             'data': {
                 'doctors': [],
                 'count': 0
             },
-            'doctor_count': 0,
-            'error': str(e)
+            'doctor_count': 0
         }
 
 def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
