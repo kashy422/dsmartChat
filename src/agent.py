@@ -515,7 +515,7 @@ def validate_doctor_result(result, patient_data=None, json_requested=True):
     # Initialize with defaults
     doctor_count = 0
     doctors_data = []
-    print("RESULT IN AGENT 518: ", result)
+    # print("RESULT IN AGENT 518: ", result)
     
     # Extract data from various formats
     if isinstance(result, dict):
@@ -975,6 +975,7 @@ def chat_engine():
                         
                         # First, try to extract and store patient details
                         logger.info("👤 Attempting to extract patient details from direct search message")
+                        
                         try:
                             # Initialize messages list if not exists
                             if session_id not in self.messages_by_session:
@@ -1069,25 +1070,35 @@ def chat_engine():
                             # Continue with doctor search even if patient extraction fails
                         
                         # First, extract structured search criteria from the natural language message
+                        print("\n" + "="*50)
+                        print("DEBUG: About to call extract_search_criteria_from_message")
+                        print("DEBUG: Input message:", user_message)
+                        print("="*50 + "\n")
+                        
                         logger.info(f"Extracting search criteria from message: '{user_message}'")
                         search_criteria = extract_search_criteria_from_message(user_message)
+                        
+                        print("\n" + "="*50)
+                        print("DEBUG: After extract_search_criteria_from_message")
+                        print("DEBUG: Extracted criteria:", search_criteria)
+                        print("="*50 + "\n")
+                        
                         logger.info(f"Extracted search criteria: {search_criteria}")
+                        
+                        # Update search params with extracted criteria
+                        search_params = search_criteria.copy()
                         
                         # Check for gender search terms in case extraction failed to identify them
                         if "gender" not in search_criteria:
                             msg_lower = user_message.lower()
                             # Explicitly check for gender terms again
                             if any(term in msg_lower for term in ["female", "females", "women", "woman", "lady"]):
-                                search_criteria["gender"] = "Female"
+                                search_params["gender"] = "Female"
                                 logger.info("Added female gender to search criteria based on direct detection")
                             elif any(term in msg_lower for term in ["male", "males", "men", "man"]):
-                                search_criteria["gender"] = "Male"
+                                search_params["gender"] = "Male"
                                 logger.info("Added male gender to search criteria based on direct detection")
 
-                        # Directly call dynamic_doctor_search with appropriate parameters
-                        search_params = {"user_message": user_message}
-                        search_params.update(search_criteria)
-                        
                         # Add coordinates 
                         if lat is not None and long is not None:
                             search_params["latitude"] = lat
@@ -1104,6 +1115,12 @@ def chat_engine():
                         # Convert to JSON for the search function
                         search_json = json.dumps(search_params)
                         logger.info(f"Executing direct search with: {search_json}")
+                        
+                        # Add debug logging for extraction
+                        logger.info("\n" + "="*50)
+                        logger.info("DEBUG: About to call dynamic_doctor_search")
+                        logger.info("DEBUG: Search params before extraction: " + str(search_params))
+                        logger.info("="*50 + "\n")
                         
                         # Call the search function with the proper JSON string
                         search_result = dynamic_doctor_search(search_json)
@@ -1859,7 +1876,7 @@ def chat_engine():
                                     # Add the AI response to history
                                     history.add_ai_message(ai_message)
                                     
-                                    print("SEARCH RESULT AGENT 1770: ", search_result)
+                                    # print("SEARCH RESULT AGENT 1770: ", search_result)
                                     # Create final response object with the LLM-generated message
                                     final_response = {
                                         "response": {

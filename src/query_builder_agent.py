@@ -16,7 +16,20 @@ import json
 thread_local = threading.local()
 
 # Configure logging
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+
+# Configure logging
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# Add console handler if not already present
+if not logger.handlers:
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
 
 # Initialize the database connection
 db = DB()
@@ -241,107 +254,113 @@ def normalize_specialty(specialty_name: str) -> dict:
     logger.info(f"SPECIALTY: No mapping found for '{specialty_name}', keeping as is")
     return {"specialty": specialty_name}
 
-def unified_doctor_search(input_data):
-    """
-    Unified function to search for doctors based on input data
+def unified_doctor_search(search_criteria: Union[dict, str]) -> dict:
+    """Unified doctor search function that handles both structured and natural language queries"""
+    logger.info(f"TOOL CALL: unified_doctor_search with input: {search_criteria}")
     
-    Args:
-        input_data: Dictionary containing search parameters
-        
-    Returns:
-        dict with keys:
-        - data: Dictionary containing doctors list and count
-        - doctor_count: Number of doctors found
-    """
-    try:
-        # If input_data is a string, try to parse it as JSON
-        if isinstance(input_data, str):
-            try:
-                input_data = json.loads(input_data)
-            except json.JSONDecodeError:
-                logger.error("Failed to parse input data as JSON")
-                return {'data': {'doctors': [], 'count': 0}, 'doctor_count': 0}
-
-        # Extract search criteria - handle both nested and top-level cases
-        search_criteria = input_data.get('search_criteria', {})
-        if not search_criteria:  # If no nested search_criteria, use the input_data itself
-            search_criteria = {k: v for k, v in input_data.items() if k not in ['latitude', 'longitude']}
-        
-        latitude = input_data.get('latitude')
-        longitude = input_data.get('longitude')
-        
-        logger.info(f"UNIFIED_SEARCH: Processing search criteria: {search_criteria}")
-        logger.info(f"UNIFIED_SEARCH: Coordinates - lat: {latitude}, long: {longitude}")
-        
-        # Convert dictionary to SearchCriteria object
+    # Create a new session ID for this search
+    session_id = str(uuid.uuid4())
+    logger.info(f"Created new session_id in thread_local: {session_id}")
+    
+    # Initialize search parameters
+    search_params = {}
+    
+    # Handle different input types
+    if isinstance(search_criteria, str):
         try:
-            # Ensure coordinates are included in the criteria
-            if latitude is not None and longitude is not None:
-                search_criteria['latitude'] = float(latitude)
-                search_criteria['longitude'] = float(longitude)
-                logger.info(f"UNIFIED_SEARCH: Added coordinates to search criteria: lat={latitude}, long={longitude}")
+            # Try to parse as JSON first
+            json_data = json.loads(search_criteria)
+            if isinstance(json_data, dict):
+                search_params = json_data
+                logger.info(f"Parsed JSON search criteria: {search_params}")
+        except json.JSONDecodeError:
+            # If not JSON, treat as natural language query
+            logger.info(f"Processing natural language query: '{search_criteria}'")
+            # Extract search criteria from natural language
+            print("\n" + "="*50)
+            print("DEBUG: About to call extract_search_criteria_from_message")
+            print("DEBUG: Input message:", search_criteria)
+            print("="*50 + "\n")
             
-            # Log the search criteria before conversion
-            logger.info(f"UNIFIED_SEARCH: Converting search criteria to SearchCriteria object: {search_criteria}")
+            search_params = extract_search_criteria_from_message(search_criteria)
+            logger.info(f"Extracted search criteria: {search_params}")
             
-            criteria = SearchCriteria(**search_criteria)
-            logger.info(f"UNIFIED_SEARCH: Converted to SearchCriteria: {criteria.dict(exclude_none=True)}")
-        except Exception as e:
-            logger.error(f"UNIFIED_SEARCH: Error converting to SearchCriteria: {str(e)}")
-            # If conversion fails, try to extract specialty from user_message
-            if isinstance(input_data, dict) and 'user_message' in input_data:
-                user_message = input_data['user_message']
-                extracted = extract_search_criteria_from_message(user_message)
-                # Add coordinates to extracted criteria
-                if latitude is not None and longitude is not None:
-                    extracted['latitude'] = float(latitude)
-                    extracted['longitude'] = float(longitude)
+    elif isinstance(search_criteria, dict):
+        # If it's already a dict, check if it contains a user_message
+        if "user_message" in search_criteria:
+            user_message = search_criteria["user_message"]
+            logger.info(f"Found user_message in criteria: '{user_message}'")
+            
+            # Extract search criteria from the user message
+            print("\n" + "="*50)
+            print("DEBUG: About to call extract_search_criteria_from_message")
+            print("DEBUG: Input message:", user_message)
+            print("="*50 + "\n")
+            
+            extracted_criteria = extract_search_criteria_from_message(user_message)
+            logger.info(f"Extracted search criteria: {extracted_criteria}")
+            
+            # Update search params with extracted criteria
+            search_params.update(extracted_criteria)
+            
+            # Preserve any additional parameters from original criteria
+            for key, value in search_criteria.items():
+                if key != "user_message":
+                    search_params[key] = value
+        else:
+            search_params = search_criteria
+            logger.info(f"Using provided dictionary criteria: {search_params}")
+    
+    # Get coordinates from search params
+    lat = search_params.get("latitude")
+    long = search_params.get("longitude")
+    
+    if lat is not None and long is not None:
+        logger.info(f"UNIFIED_SEARCH: Coordinates - lat: {lat}, long: {long}")
+        logger.info(f"UNIFIED_SEARCH: Added coordinates to search criteria: lat={lat}, long={long}")
+    else:
+        logger.warning("UNIFIED_SEARCH: No coordinates provided in search criteria")
+    
+    # Convert to SearchCriteria object
+    logger.info(f"UNIFIED_SEARCH: Converting search criteria to SearchCriteria object: {search_params}")
+    try:
+        criteria = SearchCriteria(**search_params)
+        logger.info(f"UNIFIED_SEARCH: Converted to SearchCriteria: {criteria.dict()}")
+    except Exception as e:
+        logger.error(f"UNIFIED_SEARCH: Error converting to SearchCriteria: {str(e)}")
+        # If conversion fails, try to extract from user message
+        if isinstance(search_criteria, dict) and "user_message" in search_criteria:
+            user_message = search_criteria["user_message"]
+            logger.info(f"UNIFIED_SEARCH: Attempting to extract criteria from user message: {user_message}")
+            extracted = extract_search_criteria_from_message(user_message)
+            logger.info(f"UNIFIED_SEARCH: Extracted criteria: {extracted}")
+            try:
                 criteria = SearchCriteria(**extracted)
-                logger.info(f"UNIFIED_SEARCH: Created SearchCriteria from user message: {criteria.dict(exclude_none=True)}")
-            else:
-                raise ValueError("Could not create SearchCriteria from input data")
+                logger.info(f"UNIFIED_SEARCH: Successfully converted extracted criteria to SearchCriteria: {criteria.dict()}")
+            except Exception as e2:
+                logger.error(f"UNIFIED_SEARCH: Error converting extracted criteria: {str(e2)}")
+                # If all else fails, create empty criteria
+                criteria = SearchCriteria()
+                logger.warning("UNIFIED_SEARCH: Using empty SearchCriteria as fallback")
+    
+    # Build and execute query
+    logger.info(f"Building query with criteria: {criteria.dict()}")
+    try:
+        result = build_query(criteria)
         
-        # Build the query
-        query_result = build_query(criteria)
-        if not query_result:
-            logger.warning("UNIFIED_SEARCH: No query result returned")
-            return {
-                'data': {
-                    'doctors': [],
-                    'count': 0
-                },
-                'doctor_count': 0
-            }
-            
-        # Extract doctors and count
-        doctors = query_result.get('data', [])
-        doctor_count = len(doctors)
-        logger.info(f"UNIFIED_SEARCH: Found {doctor_count} doctors")
-        
-        # Format the result
-        result = {
-            'data': {
-                'doctors': doctors,
-                'count': doctor_count
-            },
-            'doctor_count': doctor_count
-        }
-        
-        # Log the result structure
-        logger.info(f"UNIFIED_SEARCH: Returning result with {doctor_count} doctors")
-        logger.debug(f"UNIFIED_SEARCH: Result structure: {result}")
+        # Process results
+        if result and "data" in result and "doctors" in result["data"]:
+            doctors = result["data"]["doctors"]
+            logger.info(f"UNIFIED_SEARCH: Found {len(doctors)} doctors")
+            logger.info(f"UNIFIED_SEARCH: Returning result with {len(doctors)} doctors")
+        else:
+            logger.warning("UNIFIED_SEARCH: No doctors found in result")
+            result = {"data": {"doctors": []}}
         
         return result
-        
     except Exception as e:
-        logger.error(f"UNIFIED_SEARCH: Error in unified_doctor_search: {str(e)}")
-        return {
-            'data': {
-                'doctors': [],
-                'count': 0
-            },
-            'doctor_count': 0
-        }
+        logger.error(f"UNIFIED_SEARCH: Error building or executing query: {str(e)}")
+        return {"data": {"doctors": []}}
 
 def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
     """
@@ -354,38 +373,96 @@ def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
     Returns:
         Dictionary containing extracted search criteria
     """
+    # Add very obvious debug statement
+    print("\n" + "!"*50)
+    print("DEBUG: EXTRACTION FUNCTION CALLED!")
+    print("DEBUG: Input message:", message)
+    print("!"*50 + "\n")
+    
     try:
+        # Log to both root logger and module logger for visibility
+        root_logger.info("\n" + "="*50)
+        root_logger.info("🔍 Starting search criteria extraction for message: '%s'", message)
+        root_logger.info("="*50)
+        
         # Prepare prompt for criteria extraction
         system_prompt = """Extract search criteria from the user's message into a structured format. Focus on:
-        - Specialty/type of doctor (e.g., dentist, cardiologist, pediatrician)
-        - Price range (min and max in SAR) in western numbers.
-        - Rating requirements (minimum rating out of 5) in western numbers.
-        - Experience requirements (minimum years) in western numbers.
-        - Doctor name if mentioned (with title Dr/Doctor removed)
-        - Clinic/branch name if mentioned
-        - Gender preference ('male' or 'female' doctor) nothing outside these two options.
+        - Specialty/type of doctor (e.g., dentist, cardiologist, pediatrician) - ALWAYS in English
+        - Price range (min and max in SAR) in western numbers
+        - Rating requirements (minimum rating out of 5) in western numbers
+        - Experience requirements (minimum years) in western numbers
+        - Doctor name if mentioned (with title Dr/Doctor removed) - KEEP in original language (Arabic/English)
+        - Clinic/branch name if mentioned - KEEP in original language (Arabic/English)
+        - Gender preference ('male' or 'female' doctor) - ALWAYS in English
         
-        IMPORTANT: For gender, look for any indication that the user wants only male or female doctors. 
-        This includes phrases like:
-        - "only females" or "only males"
-        - "female doctors" or "male doctors"
-        - "women doctors" or "men doctors"
-        - "show me females" or "show me males"
+        IMPORTANT RULES:
+        1. Doctor names and branch names:
+           - Keep in original language (Arabic or English)
+           - Remove titles like "Dr.", "Doctor", "الدكتور", "دكتور", "د.", "دكتر", "دكتوره", "دكتورة"
+           - For Arabic names, pay special attention to these patterns:
+             * "الدكتور [name]" -> extract "[name]"
+             * "دكتور [name]" -> extract "[name]"
+             * "ابحث عن الدكتور [name]" -> extract "[name]"
+             * "اريد الدكتور [name]" -> extract "[name]"
+             * "عايز الدكتور [name]" -> extract "[name]"
+             * "عند الدكتور [name]" -> extract "[name]"
+             * "مع الدكتور [name]" -> extract "[name]"
+             * "عند دكتور [name]" -> extract "[name]"
+             * "مع دكتور [name]" -> extract "[name]"
+             * "عايز دكتور [name]" -> extract "[name]"
+             * "ابحث عن دكتور [name]" -> extract "[name]"
+             * "اريد دكتور [name]" -> extract "[name]"
+             * "ابحث عن [name]" -> extract "[name]" (if context suggests it's a doctor)
+             * "اريد [name]" -> extract "[name]" (if context suggests it's a doctor)
+             * "عايز [name]" -> extract "[name]" (if context suggests it's a doctor)
+             * "عند [name]" -> extract "[name]" (if context suggests it's a doctor)
+             * "مع [name]" -> extract "[name]" (if context suggests it's a doctor)
+           - Examples:
+             * "Dr. Smith" -> "Smith"
+             * "الدكتور أحمد" -> "أحمد"
+             * "دكتور محمد" -> "محمد"
+             * "ابحث عن الدكتور الغريب" -> "الغريب"
+             * "اريد الدكتور يوسف" -> "يوسف"
+             * "عايز الدكتور علي" -> "علي"
+             * "عند الدكتور خالد" -> "خالد"
+             * "مع الدكتور سعيد" -> "سعيد"
+             * "ابحث عن الغريب" -> "الغريب"
+             * "اريد يوسف" -> "يوسف"
+             * "عايز علي" -> "علي"
+             * "عند خالد" -> "خالد"
+             * "مع سعيد" -> "سعيد"
+             * "مستشفى الملك فهد" -> "مستشفى الملك فهد"
+             * "King Fahd Hospital" -> "King Fahd Hospital"
         
-        For specialty, look for:
-        - Direct mentions (e.g., "dentist", "cardiologist")
-        - Common variations (e.g., "dental", "heart doctor")
-        - Context clues (e.g., "teeth" -> dentist, "heart" -> cardiologist)
+        2. All other fields must be in English:
+           - Specialty: "طبيب أسنان" -> "dentist"
+           - Gender: "طبيبة" -> "female", "طبيب" -> "male"
+           - Numbers: Use western numerals (1, 2, 3) not Arabic numerals (١، ٢، ٣)
+        
+        3. For gender, look for any indication that the user wants only male or female doctors:
+           - "only females" or "only males"
+           - "female doctors" or "male doctors"
+           - "women doctors" or "men doctors"
+           - "show me females" or "show me males"
+           - "طبيب" -> "male"
+           - "طبيبة" -> "female"
+           - "دكتور" -> "male"
+           - "دكتورة" -> "female"
+        
+        4. For specialty, look for:
+           - Direct mentions (e.g., "dentist", "cardiologist")
+           - Common variations (e.g., "dental", "heart doctor")
+           - Context clues (e.g., "teeth" -> dentist, "heart" -> cardiologist)
         
         Return ONLY a JSON object with these fields (include only if mentioned):
         {
-            "speciality": "string",
+            "speciality": "string (in English)",
             "min_price": number,
             "max_price": number,
             "min_rating": number,
             "min_experience": number,
-            "doctor_name": "name",
-            "branch_name": "name",
+            "doctor_name": "name (in original language)",
+            "branch_name": "name (in original language)",
             "gender": "male" or "female"
         }
         """
@@ -396,25 +473,66 @@ def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
             {"role": "user", "content": message}
         ]
         
-        # Call GPT to extract criteria
+        root_logger.info("🤖 Calling GPT for criteria extraction...")
+        
+        # Call GPT to extract criteria with improved configuration
         response = openai_client.chat.completions.create(
-            model="gpt-4o-mini-2024-07-18",
+            model="gpt-4",  # Using GPT-4 for better Arabic understanding
             messages=messages,
-            temperature=0.1  # Low temperature for consistent extraction
+            temperature=0.3,  # Slightly higher temperature for better handling of variations
+            max_tokens=500,  # Increased token limit for better extraction
+            presence_penalty=0.1,  # Encourage more diverse token usage
+            frequency_penalty=0.1  # Discourage repetition
         )
+        
+        # Log the raw response
+        raw_response = response.choices[0].message.content
+        root_logger.info("\n📝 Raw GPT Response:")
+        root_logger.info("-"*30)
+        root_logger.info(raw_response)
+        root_logger.info("-"*30)
         
         # Parse the response
         try:
-            extracted = json.loads(response.choices[0].message.content)
-            logger.info(f"Extracted search criteria: {extracted}")
+            extracted = json.loads(raw_response)
+            root_logger.info("\n✅ Successfully parsed JSON response")
+            root_logger.info("\n🔍 Extracted search criteria:")
+            for key, value in extracted.items():
+                root_logger.info(f"   - {key}: {value}")
+            
+            # Additional validation for doctor name extraction
+            if "doctor_name" in extracted:
+                original_name = extracted["doctor_name"]
+                # Remove any remaining titles that might have been missed
+                doctor_name = original_name
+                titles_to_remove = ["الدكتور", "دكتور", "د.", "دكتر", "دكتوره", "دكتورة", "Dr.", "Doctor"]
+                for title in titles_to_remove:
+                    if doctor_name.startswith(title + " "):
+                        doctor_name = doctor_name[len(title) + 1:]
+                extracted["doctor_name"] = doctor_name.strip()
+                
+                if original_name != extracted["doctor_name"]:
+                    root_logger.info(f"\n🔄 Cleaned doctor name: '{original_name}' -> '{extracted['doctor_name']}'")
+            
+            root_logger.info("\n📊 Final extracted criteria:")
+            root_logger.info(json.dumps(extracted, indent=2, ensure_ascii=False))
+            root_logger.info("\n" + "="*50 + "\n")  # Visual separator
+            
+            # Also log to module logger
+            logger.info(f"Extracted criteria: {json.dumps(extracted, indent=2, ensure_ascii=False)}")
+            
             return extracted
+            
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse GPT response as JSON: {str(e)}")
-            logger.error(f"Raw response: {response.choices[0].message.content}")
+            root_logger.error(f"\n❌ Failed to parse GPT response as JSON: {str(e)}")
+            root_logger.error(f"\n❌ Raw response that failed to parse:")
+            root_logger.error("-"*30)
+            root_logger.error(raw_response)
+            root_logger.error("-"*30)
             return {}
             
     except Exception as e:
-        logger.error(f"Error extracting search criteria: {str(e)}")
+        root_logger.error(f"\n❌ Error extracting search criteria: {str(e)}")
         return {}
 
 def unified_doctor_search_tool(input_data: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
