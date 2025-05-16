@@ -12,6 +12,7 @@ from openai import OpenAI
 import uuid
 import json
 
+
 # Initialize thread_local storage
 thread_local = threading.local()
 
@@ -259,8 +260,8 @@ def unified_doctor_search(search_criteria: Union[dict, str]) -> dict:
     logger.info(f"TOOL CALL: unified_doctor_search with input: {search_criteria}")
     
     # Create a new session ID for this search
-    session_id = str(uuid.uuid4())
-    logger.info(f"Created new session_id in thread_local: {session_id}")
+    # session_id = str(uuid.uuid4())
+    # logger.info(f"Created new session_id in thread_local: {session_id}")
     
     # Initialize search parameters
     search_params = {}
@@ -357,10 +358,35 @@ def unified_doctor_search(search_criteria: Union[dict, str]) -> dict:
             logger.warning("UNIFIED_SEARCH: No doctors found in result")
             result = {"data": {"doctors": []}}
         
-        return result
+
+        
+        return {
+            "response": {
+                "message": f"I found {len(result['data']['doctors'])} doctors matching your criteria.",
+                "raw_message": "",
+                "patient": {"session_id": getattr(thread_local, 'session_id', '')},
+                "data": result["data"]["doctors"],
+                "is_doctor_search": True,
+                "needs_llm_processing": True
+            },
+            "display_results": len(result["data"]["doctors"]) > 0,
+            "doctor_count": len(result["data"]["doctors"])
+        }
     except Exception as e:
         logger.error(f"UNIFIED_SEARCH: Error building or executing query: {str(e)}")
-        return {"data": {"doctors": []}}
+        # return {"data": {"doctors": []}}
+        return {
+            "response": {
+                "message": "I couldn't find any doctors matching your criteria.",
+                "raw_message": "",
+                "patient": {"session_id": getattr(thread_local, 'session_id', '')},
+                "data": [],
+                "is_doctor_search": True,
+                "needs_llm_processing": True
+            },
+            "display_results": False,
+            "doctor_count": 0
+        }
 
 def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
     """
@@ -563,6 +589,7 @@ def unified_doctor_search_tool(input_data: Union[str, Dict[str, Any]]) -> Dict[s
         
         # Call the unified search function once
         search_results = unified_doctor_search(input_data)
+        # formatted_result = ensure_proper_doctor_search_format(search_results)
         logger.info("TOOL CALL: Got search results")
         
         # Extract the doctor count from the results for logging
@@ -592,6 +619,7 @@ def unified_doctor_search_tool(input_data: Union[str, Dict[str, Any]]) -> Dict[s
                 result["count"] = len(result["doctors"])
                 logger.info(f"TOOL DEBUG: Added count field with value {result['count']}")
         
+        # formatted_result = ensure_proper_doctor_search_format(search_results)
         return search_results
         
     except Exception as e:
