@@ -76,7 +76,8 @@ class SpecialtyDataCache:
                 s.SpecialityName as specialty,
                 s.SubSpeciality as subspecialty,
                 s.Signs as signs,
-                s.Symptoms as symptoms
+                s.Symptoms as symptoms,
+                s.Operations as operations
             FROM 
                 dbo.Speciality s
             """
@@ -94,6 +95,7 @@ class SpecialtyDataCache:
                 # Convert signs and symptoms from comma-separated strings to lists
                 signs = []
                 symptoms = []
+                operations = []
                 
                 if row.get("signs"):
                     signs = [s.strip() for s in row["signs"].split(",") if s.strip()]
@@ -101,11 +103,15 @@ class SpecialtyDataCache:
                 if row.get("symptoms"):
                     symptoms = [s.strip() for s in row["symptoms"].split(",") if s.strip()]
                 
+                if row.get("operations"):
+                    operations = [o.strip() for o in row["operations"].split(",") if o.strip()]
+                
                 formatted_row = {
                     "specialty": row.get("specialty", ""),
                     "subspecialty": row.get("subspecialty", ""),
                     "signs": signs,
-                    "symptoms": symptoms
+                    "symptoms": symptoms,
+                    "operations": operations
                 }
                 
                 cls._data.append(formatted_row)
@@ -154,7 +160,7 @@ def detect_symptoms_and_specialties(user_message: str) -> Dict[str, Any]:
             }
         
         # Quick check for common greeting words - avoid unnecessary API calls
-        common_greetings = ["hammad", "hello", "hi", "hey", "salam", "marhaba", "ahlan"]
+        common_greetings = [ "hello", "hi", "hey", "salam", "marhaba", "ahlan"]
         message_lower = user_message.lower().strip()
         
         # If the message is just a greeting or contains only greeting words, return immediately
@@ -191,36 +197,50 @@ def detect_symptoms_and_specialties(user_message: str) -> Dict[str, Any]:
         You are a medical assistant specializing in symptom analysis and specialist referrals.
         
         TASK:
-        1. FIRST determine if the user's message is describing medical symptoms or health concerns.
+        1. FIRST determine if the user's message is:
+           a) Describing medical symptoms or health concerns
+           b) Asking for information about a medical procedure or condition
+           c) Requesting general medical information
         2. If it IS describing symptoms, match these symptoms to appropriate specialties from the database.
-        3. If it is NOT describing symptoms, respond accordingly.
+        3. If it IS asking for information about a procedure or condition:
+           - Identify the relevant medical specialty for that procedure/condition
+           - Match it to appropriate specialties from the database
+           - Consider this as a valid reason to recommend a specialist
+        4. In addition to the symptoms, also consider:
+           - Signs of the symptoms
+           - Operations they are interested in
+           - Procedures they are asking about
+           - Conditions they are inquiring about
+        5. Use ALL of the above to match the user to the most appropriate specialties.
         
         IMPORTANT NOTES:
         - Common greeting phrases like "hello", "hi", "hey", "salam", "marhaba", etc. are NOT symptom descriptions
         - Very short messages with just greetings should be classified as NOT describing symptoms
+        - Information requests about medical procedures SHOULD trigger specialty matching
+        - Questions about conditions or treatments SHOULD trigger specialty matching
         
         SPECIALTY DATABASE:
         Use ONLY the following specialty data loaded from our medical database:
         {specialty_data}
         
-        ANALYSIS STEPS (only if message describes symptoms):
-        1. Identify all symptoms and health concerns in the user's message
-        2. Match these symptoms to the most appropriate medical specialties in the database
+        ANALYSIS STEPS:
+        1. Identify all symptoms, signs, operations, procedures, conditions, and health concerns in the user's message
+        2. Match these to the most appropriate medical specialties in the database
         3. For each match, determine the level of confidence (0.0-1.0)
-        4. Prioritize specialties that directly address the primary symptoms
+        4. Prioritize specialties that directly address the primary concerns
         
         REQUIREMENTS:
         - ONLY recommend specialties and subspecialties that are listed in the provided database
         - Use EXACT names of specialties and subspecialties as they appear in the database
         - Do NOT invent or suggest specialties not in the database
-        - Assign realistic confidence levels (higher for clearer symptom matches)
+        - Assign realistic confidence levels (higher for clearer matches)
         
         RESPONSE FORMAT:
         Return a JSON object with these fields:
-        - is_describing_symptoms: boolean (true if message describes symptoms, false otherwise)
+        - is_describing_symptoms: boolean (true if message describes symptoms OR asks about procedures/conditions)
         
         If is_describing_symptoms is true, also include:
-        - detected_symptoms: List of all identified symptoms and health concerns
+        - detected_symptoms: List of all identified symptoms, procedures, conditions, and health concerns
         - recommended_specialties: Array of objects, each containing:
           * name: The specialty name exactly as it appears in the database
           * subspecialty: The subspecialty name exactly as it appears in the database
@@ -250,7 +270,6 @@ def detect_symptoms_and_specialties(user_message: str) -> Dict[str, Any]:
         # Parse the GPT response
         result_json = response.choices[0].message.content
         logger.info(f"SYMPTOM ANALYZER: Processing GPT response")
-        
         result = json.loads(result_json)
         
         # Check if the message is describing symptoms

@@ -62,10 +62,13 @@ class DB:
             
             # Create SQLAlchemy connection string
             connection_string = f"mssql+pyodbc:///?odbc_connect={params}"
+
+            test_db_url = "mssql+pyodbc://@(localdb)\\MSSQLLocalDB/DrAide_Dev?driver=ODBC+Driver+17+for+SQL+Server&trusted_connection=yes"
+
             
             # Configure connection pooling for better performance
             self.engine = create_engine(
-                connection_string,
+                test_db_url,
                 pool_pre_ping=True,  # Validates connections before using them
                 pool_size=10,
                 max_overflow=20,

@@ -40,7 +40,7 @@ from .agent_tools import (
     analyze_symptoms_tool
 )
 from .common import write
-from .consts import SYSTEM_AGENT_ENHANCED
+from .consts import SYSTEM_AGENT_ENHANCED,UNIFIED_MEDICAL_ASSISTANT_PROMPT
 from .utils import CustomCallBackHandler, thread_local, setup_logging, log_data_to_csv, format_csv_data, clear_symptom_analysis_data
 from enum import Enum
 from .specialty_matcher import (
@@ -568,7 +568,7 @@ def validate_doctor_result(result, patient_data=None, json_requested=True):
     }
     
     logger.info(f"VALIDATION: Creating response with {doctor_count} doctors")
-    logger.info(f"VALIDATION: Response structure: {response}")
+    # logger.info(f"VALIDATION: Response structure: {response}")
     logger.info(f"VALIDATION: Returning validated result")
     
     return response
@@ -752,7 +752,7 @@ def chat_engine():
                 
                     # Initialize messages for this session if not exists
                     if session_id not in self.messages_by_session:
-                        self.messages_by_session[session_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
+                        self.messages_by_session[session_id] = [{"role": "system", "content": UNIFIED_MEDICAL_ASSISTANT_PROMPT}]
                 
                     messages = self.messages_by_session[session_id]
                 
@@ -802,7 +802,7 @@ def chat_engine():
                             logger.info(f"  {i}: {msg['type']} - {msg.get('content', '')[:50]}...")
                         
                         # Rebuild messages from history
-                    new_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+                    new_messages = [{"role": "system", "content": UNIFIED_MEDICAL_ASSISTANT_PROMPT}]
                     
                     for msg in history.messages:
                             if msg['type'] == 'human':
@@ -846,14 +846,14 @@ def chat_engine():
                 except Exception as e:
                     logger.error(f"SYNC ERROR: Failed to sync session history: {str(e)}", exc_info=True)
                     # Return default messages if sync fails
-                    return [{"role": "system", "content": SYSTEM_PROMPT}]
+                    return [{"role": "system", "content": UNIFIED_MEDICAL_ASSISTANT_PROMPT}]
             
             def add_message_to_history(self, session_id: str, message: dict):
                 """Helper method to add a message to both OpenAI messages and chat history"""
                 try:
                     # Get current messages
                     if session_id not in self.messages_by_session:
-                        self.messages_by_session[session_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
+                        self.messages_by_session[session_id] = [{"role": "system", "content": UNIFIED_MEDICAL_ASSISTANT_PROMPT}]
                     messages = self.messages_by_session[session_id]
                     
                     # Get history
@@ -979,7 +979,7 @@ def chat_engine():
                         try:
                             # Initialize messages list if not exists
                             if session_id not in self.messages_by_session:
-                                self.messages_by_session[session_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
+                                self.messages_by_session[session_id] = [{"role": "system", "content": UNIFIED_MEDICAL_ASSISTANT_PROMPT}]
                             messages = self.messages_by_session[session_id]
                             
                             # Create a tool call for patient details
