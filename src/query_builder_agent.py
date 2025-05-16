@@ -259,8 +259,8 @@ def unified_doctor_search(search_criteria: Union[dict, str]) -> dict:
     logger.info(f"TOOL CALL: unified_doctor_search with input: {search_criteria}")
     
     # Create a new session ID for this search
-    session_id = str(uuid.uuid4())
-    logger.info(f"Created new session_id in thread_local: {session_id}")
+    # session_id = str(uuid.uuid4())
+    # logger.info(f"Created new session_id in thread_local: {session_id}")
     
     # Initialize search parameters
     search_params = {}
@@ -592,7 +592,8 @@ def unified_doctor_search_tool(input_data: Union[str, Dict[str, Any]]) -> Dict[s
                 result["count"] = len(result["doctors"])
                 logger.info(f"TOOL DEBUG: Added count field with value {result['count']}")
         
-        return search_results
+        formatted_result = ensure_proper_doctor_search_format(search_results)
+        return formatted_result
         
     except Exception as e:
         logger.error(f"Error in unified_doctor_search_tool: {str(e)}", exc_info=True)
