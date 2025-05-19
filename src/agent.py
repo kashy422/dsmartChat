@@ -1745,19 +1745,19 @@ When responding:
                             doctor_count = len(doctor_data)
                             
                             for i, doctor in enumerate(doctor_data[:min(5, doctor_count)]):  # Limit to first 5 doctors
-                                doc_info = {
-                                    "name": doctor.get("DocName_en", "Unknown"),
-                                    "specialty": doctor.get("Specialty", ""),
+                                    doc_info = {
+                                        "name": doctor.get("DocName_en", "Unknown"),
+                                        "specialty": doctor.get("Specialty", ""),
                                     "subspecialty": doctor.get("Subspecialities", ""),
                                     "hospital": doctor.get("Branch_en", ""),
-                                    "rating": doctor.get("Rating", ""),
-                                    "fee": doctor.get("Fee", ""),
+                                        "rating": doctor.get("Rating", ""),
+                                        "fee": doctor.get("Fee", ""),
                                     "gender": doctor.get("Gender", ""),
                                     "experience": doctor.get("Experience", ""),
                                     "distance": doctor.get("Distance", "")
-                                }
-                                formatted_doctors.append(doc_info)
-                            
+                                    }
+                                    formatted_doctors.append(doc_info)
+                                
                             # Create special system message for doctor results formatting
                             doctor_guidance = {
                                 "role": "system", 
@@ -1794,24 +1794,97 @@ DO NOT include numbered lists, bullet points, or details of any kind.
                                 history.messages.pop()
                             # Add the simplified message
                             history.add_ai_message(content)
+                        elif doctor_search_result is not None and len(doctor_data) == 0:  # This is a doctor search but no results were found
+                            # Use the existing messages with a special system message to guide the response
+                            context_messages = []
+                            # Start with the unified prompt
+                            context_messages.append({"role": "system", "content": UNIFIED_MEDICAL_ASSISTANT_PROMPT})
+                            
+                            # Add recent conversation context (up to 4 messages)
+                            recent_messages = []
+                            for msg in history.messages[-4:]:
+                                if msg['type'] == 'human':
+                                    recent_messages.append({"role": "user", "content": msg['content']})
+                                elif msg['type'] == 'ai':
+                                    recent_messages.append({"role": "assistant", "content": msg['content']})
+                            
+                            context_messages.extend(recent_messages)
+                            
+                            # Add a special guidance for no doctors found
+                            doctor_guidance = {
+                                "role": "system", 
+                                "content": """
+IMPORTANT: No doctors were found matching the user's request.
+
+In your response:
+1. Mention that we're currently certifying doctors in our network
+2. Suggest checking back later
+3. Match the user's exact language style and tone
+4. Keep your response empathetic and brief
+5. Do not mention that you're being instructed to say this
+
+Example format (adjust to match user's language and style):
+"No doctors found matching your criteria. We are currently certifying doctors in our network. Please check back soon."
+"""
+                            }
+                            context_messages.append(doctor_guidance)
+                            
+                            # Simple message indicating no results
+                            context_messages.append({"role": "user", "content": "Please reply about no doctors being found."})
+                            
+                            # Generate response using the main LLM with context
+                            no_results_response = client.chat.completions.create(
+                                model="gpt-4o-mini-2024-07-18",
+                                messages=context_messages
+                            )
+                            
+                            # Use the LLM's response
+                            content = no_results_response.choices[0].message.content
+                            
+                            # Update the history
+                            if len(history.messages) > 0 and history.messages[-1]['type'] == 'ai':
+                                history.messages.pop()
+                            history.add_ai_message(content)
+                            
+                            # Initialize response_object first to avoid the error
+                            response_object = {
+                                "response": {
+                                    "message": "",
+                                    "patient": patient_data or {"session_id": session_id},
+                                    "data": doctor_data if has_doctor_results else []
+                                },
+                                "display_results": has_doctor_results
+                            }
+                            
+                            # Now update the response object with the generated content
+                            response_object["response"]["message"] = content
+                            response_object["response"]["is_doctor_search"] = True
+                            response_object["doctor_count"] = 0
+                            
+                            return response_object
                         
-                        # Build final response
+                        # Now build the response object - note this happens AFTER we potentially update 'content'
                         response_object = {
-                            "response": {
+                                "response": {
                                 "message": content,
-                                "patient": patient_data or {"session_id": session_id},
+                                    "patient": patient_data or {"session_id": session_id},
                                 "data": doctor_data if has_doctor_results else []
                             },
                             "display_results": has_doctor_results
                         }
                         
+                        # Add doctor-specific fields based on results
                         if has_doctor_results:
-                            # Add doctor-specific fields
                             response_object["response"]["is_doctor_search"] = True
                             response_object["doctor_count"] = len(doctor_data)
                             
                             # Clear symptom_analysis from thread_local after doctor search
                             clear_symptom_analysis("after doctor search response generated", session_id)
+                        elif doctor_search_result is not None:
+                            # This handles both the zero results case and the 
+                            # case where we explicitly processed no doctors found above
+                            response_object["response"]["is_doctor_search"] = True
+                            response_object["doctor_count"] = 0
                         
                         return response_object
                     
