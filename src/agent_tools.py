@@ -111,68 +111,80 @@ def profile(func):
 @tool(return_direct=False)
 @profile
 def dynamic_doctor_search(search_query: Union[str, dict]) -> dict:
-    """Dynamic doctor search that can handle both natural language and structured criteria"""
+    """
+    Search for doctors based on various criteria.
+    
+    Args:
+        search_query: Either a JSON string with search criteria or a natural language query
+            
+    Returns:
+        Dictionary with search results
+    """
     logger.info(f"DOCTOR SEARCH: Using session ID: {getattr(thread_local, 'session_id', 'unknown')}")
-    logger.info("DOCTOR SEARCH: Clearing previous symptom analysis data")
-    clear_symptom_analysis_data(reason="starting new direct search")
     
-    # Initialize search parameters
-    search_params = {}
+    # Clear previous symptom analysis data to avoid contamination
+    logger.info(f"DOCTOR SEARCH: Clearing previous symptom analysis data")
+    clear_symptom_analysis_data("starting new direct search")
     
-    # Handle different input types
-    if isinstance(search_query, str):
-        try:
-            # Try to parse as JSON first
-            json_data = json.loads(search_query)
-            if isinstance(json_data, dict):
-                search_params = json_data
-                logger.info(f"Detected structured criteria in JSON format: {search_params}")
-        except json.JSONDecodeError:
-            # If not JSON, treat as natural language query
-            logger.info(f"Processing natural language query: '{search_query}'")
-            # Extract search criteria from natural language
-            print("\n" + "="*50)
-            print("DEBUG: About to call extract_search_criteria_from_message")
-            print("DEBUG: Input message:", search_query)
-            print("="*50 + "\n")
+    try:
+        # If the search_query is a string, try to parse as JSON first
+        if isinstance(search_query, str):
+            try:
+                criteria_dict = json.loads(search_query)
+                logger.info(f"Detected structured criteria in JSON format: {criteria_dict}")
+                
+                # Extract specialty information if available
+                if "speciality" in criteria_dict:
+                    logger.info(f"Using specialty: {criteria_dict['speciality']}")
+                
+                # Extract coordinates
+                if "latitude" in criteria_dict and "longitude" in criteria_dict:
+                    thread_local.latitude = criteria_dict["latitude"]
+                    thread_local.longitude = criteria_dict["longitude"]
+                    logger.info(f"Using coordinates from search params: lat={criteria_dict['latitude']}, long={criteria_dict['longitude']}")
+                
+                logger.info(f"Calling unified_doctor_search with criteria: {criteria_dict}")
+                result = unified_doctor_search(criteria_dict)
+                
+            except json.JSONDecodeError:
+                # If not valid JSON, treat as natural language query
+                logger.info(f"Processing as natural language query: {search_query}")
+                
+                # Extract coordinates if available in thread_local
+                coordinates = {}
+                if hasattr(thread_local, 'latitude') and hasattr(thread_local, 'longitude'):
+                    coordinates = {
+                        "latitude": thread_local.latitude,
+                        "longitude": thread_local.longitude
+                    }
+                    logger.info(f"Using coordinates from thread_local: lat={thread_local.latitude}, long={thread_local.longitude}")
+                
+                # Create parameters for unified search
+                search_params = {
+                    "user_message": search_query,
+                    **coordinates
+                }
+                
+                logger.info(f"Calling unified_doctor_search with text and coordinates: {search_params}")
+                result = unified_doctor_search(search_params)
+        else:
+            # Handle direct dictionary input
+            logger.info(f"Using provided dictionary: {search_query}")
+            result = unified_doctor_search(search_query)
             
-            search_params = extract_search_criteria_from_message(search_query)
-            logger.info(f"Extracted search criteria: {search_params}")
-            
-    elif isinstance(search_query, dict):
-        search_params = search_query
-        logger.info(f"Using provided dictionary criteria: {search_params}")
-    
-    # Extract specialty and subspecialty if present
-    specialty = search_params.get("speciality")
-    subspecialty = search_params.get("subspeciality")
-    
-    if specialty:
-        logger.info(f"Using specialty: {specialty}")
-    if subspecialty:
-        logger.info(f"Using subspecialty: {subspecialty}")
-    
-    # Get coordinates from search params or use defaults
-    lat = search_params.get("latitude")
-    long = search_params.get("longitude")
-    
-    if lat is not None and long is not None:
-        logger.info(f"Using coordinates from search params: lat={lat}, long={long}")
-    else:
-        # Use default coordinates for Riyadh
-        lat = 24.7136
-        long = 46.6753
-        logger.info(f"Using default coordinates for Riyadh: lat={lat}, long={long}")
-    
-    # Add coordinates to search params
-    search_params["latitude"] = lat
-    search_params["longitude"] = long
-    
-    # Call unified search with extracted criteria
-    logger.info(f"Calling unified_doctor_search with criteria: {search_params}")
-    result = unified_doctor_search(search_params)
-    
-    return result
+        # Ensure proper formatting of result
+        result = ensure_proper_doctor_search_format(result, str(search_query))
+        
+        # Ensure the function has a name attribute that matches its actual name
+        dynamic_doctor_search.__name__ = "dynamic_doctor_search"
+        
+        return result
+    except Exception as e:
+        logger.error(f"Error in doctor search: {str(e)}", exc_info=True)
+        return {"error": str(e), "doctors": []}
+    finally:
+        # Add a timestamp to the last search
+        thread_local.last_search_time = time.time()
 
 def ensure_proper_doctor_search_format(result: Dict[str, Any], query: str) -> Dict[str, Any]:
     """
@@ -285,127 +297,81 @@ def ensure_proper_doctor_search_format(result: Dict[str, Any], query: str) -> Di
 @profile
 def analyze_symptoms(symptom_description: str) -> Dict[str, Any]:
     """
-    Analyze patient symptoms to determine potential medical specialties.
-    This helps guide patients to the right specialist based on their described symptoms.
+    Analyze the patient's symptom description to determine likely medical specialties required.
+    Uses the MedicalSpecialty model to determine the right specialty based on symptoms mentioned.
     
     Args:
-        symptom_description: Description of patient symptoms and concerns
+        symptom_description: Description of symptoms from the patient
         
     Returns:
-        Dictionary with specialty recommendations and analysis
+        Dictionary with list of detected symptoms and matched specialties
     """
+    function_start = time.time()
+    logger.info(f"DETAILED DEBUG: Starting symptom analysis for: '{symptom_description[:50]}...'")
+    
     try:
-        # Import thread_local for session data storage
-        from .utils import thread_local
-        
-        logger.info(f"DETAILED DEBUG: Starting symptom analysis for: '{symptom_description[:50]}...'")
-        
-        # CRITICAL FIX: Clear any existing symptom analysis data before starting new analysis
-        if hasattr(thread_local, 'symptom_analysis'):
-            logger.info(f"CRITICAL FIX: Clearing previous symptom_analysis before starting new analysis")
-            delattr(thread_local, 'symptom_analysis')
-        
-        # Clear any specialty-related fields that might be in thread_local
-        for attr in ['specialty', 'subspecialty', 'speciality', 'subspeciality', 'last_specialty', 'detected_specialties']:
-            if hasattr(thread_local, attr):
-                logger.info(f"CRITICAL FIX: Clearing {attr} from thread_local before symptom analysis")
-                delattr(thread_local, attr)
-        
-        # Call the specialty detection function
+        # Detect symptoms and specialties
         result = detect_symptoms_and_specialties(symptom_description)
         
-        # Debug - Log the entire result structure
-        logger.info(f"DETAILED DEBUG: Raw result structure from detect_symptoms_and_specialties: {str(type(result))}")
-        logger.info(f"DETAILED DEBUG: Result keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
-        
-        if isinstance(result, dict):
-            for key, value in result.items():
-                logger.info(f"DETAILED DEBUG: Key '{key}' has type {type(value)}")
-                if isinstance(value, dict):
-                    logger.info(f"DETAILED DEBUG: Subkeys in '{key}': {list(value.keys())}")
-        
-        # More detailed logging for symptom_analysis
-        if "symptom_analysis" in result:
-            sa = result["symptom_analysis"]
-            logger.info(f"DETAILED DEBUG: symptom_analysis type: {type(sa)}")
-            logger.info(f"DETAILED DEBUG: symptom_analysis keys: {list(sa.keys()) if isinstance(sa, dict) else 'Not a dict'}")
-            
-            # Check for specialties/recommended_specialties
-            for key in ["recommended_specialties", "matched_specialties", "specialties"]:
-                if key in sa:
-                    logger.info(f"DETAILED DEBUG: Found '{key}' in symptom_analysis with {len(sa[key])} items")
-                    if len(sa[key]) > 0:
-                        logger.info(f"DETAILED DEBUG: First item in '{key}': {sa[key][0]}")
-        
-        # Check for specialties directly in result
-        if "specialties" in result:
-            logger.info(f"DETAILED DEBUG: Found 'specialties' in result with {len(result['specialties'])} items")
-            if len(result['specialties']) > 0:
-                logger.info(f"DETAILED DEBUG: First specialty: {result['specialties'][0]}")
-        
-        # Store the result in thread_local for use by other tools
-        # This ensures the doctor search can access the specialty information
-        thread_local.symptom_analysis = {
-            'symptom_description': symptom_description,
-            'symptom_analysis': result,
-            'session_id': getattr(thread_local, 'session_id', str(uuid.uuid4()))  # Store session ID with analysis
-        }
-        
+        # Store in thread_local for unified search access
+        thread_local.symptom_analysis = result
         logger.info(f"DETAILED DEBUG: Stored symptom analysis in thread_local for session {getattr(thread_local, 'session_id', 'unknown')}")
         
-        # Add a simplified version of the result for the agent
-        # Handle potential missing keys in the result
-        detected_symptoms = []
+        # Create a simpler output format
+        simplified_result = {}
+        
+        # Extract detected symptoms
+        symptoms_detected = []
+        if "symptom_analysis" in result and "detected_symptoms" in result["symptom_analysis"]:
+            symptoms_detected = result["symptom_analysis"]["detected_symptoms"]
+            logger.info(f"DETAILED DEBUG: Extracted symptoms from symptom_analysis.detected_symptoms: {symptoms_detected}")
+        simplified_result["symptoms_detected"] = symptoms_detected
+        
+        # Extract specialties
         top_specialties = []
+        specialties_data = []
         
-        # Safely extract symptoms
-        if result and "symptom_analysis" in result and "detected_symptoms" in result.get("symptom_analysis", {}):
-            detected_symptoms = result["symptom_analysis"]["detected_symptoms"]
-            logger.info(f"DETAILED DEBUG: Extracted symptoms from symptom_analysis.detected_symptoms: {detected_symptoms}")
-        elif result and "detected_symptoms" in result:
-            detected_symptoms = result["detected_symptoms"]
-            logger.info(f"DETAILED DEBUG: Extracted symptoms from result.detected_symptoms: {detected_symptoms}")
+        if "specialties" in result:
+            specialties_data = result["specialties"]
+            logger.info(f"DETAILED DEBUG: Found specialties from result.specialties")
+        elif "symptom_analysis" in result and "recommended_specialties" in result["symptom_analysis"]:
+            specialties_data = result["symptom_analysis"]["recommended_specialties"]
+            logger.info(f"DETAILED DEBUG: Found specialties from symptom_analysis.recommended_specialties")
         
-        # Safely extract specialties
-        specialties = []
-        specialty_source = None
+        # Convert subspecialty to subspeciality format for compatibility
+        if specialties_data:
+            for specialty in specialties_data:
+                if "subspecialty" in specialty and "subspeciality" not in specialty:
+                    specialty["subspeciality"] = specialty["subspecialty"]
+            
+            logger.info(f"DETAILED DEBUG: Extracted {len(specialties_data)} specialties: {specialties_data}")
+            
+            # Extract top specialty names
+            for specialty in specialties_data:
+                if "name" in specialty:
+                    top_specialties.append(specialty["name"])
+                elif "specialty" in specialty:
+                    top_specialties.append(specialty["specialty"])
         
-        if result and "specialties" in result and result["specialties"]:
-            specialties = result["specialties"]
-            specialty_source = "result.specialties"
-        elif result and "symptom_analysis" in result and "recommended_specialties" in result.get("symptom_analysis", {}):
-            specialties = result["symptom_analysis"]["recommended_specialties"]
-            specialty_source = "symptom_analysis.recommended_specialties"
-        elif result and "symptom_analysis" in result and "matched_specialties" in result.get("symptom_analysis", {}):
-            specialties = result["symptom_analysis"]["matched_specialties"] 
-            specialty_source = "symptom_analysis.matched_specialties"
+        simplified_result["top_specialties"] = top_specialties
+        logger.info(f"DETAILED DEBUG: Top specialties: {top_specialties}")
         
-        logger.info(f"DETAILED DEBUG: Found specialties from {specialty_source or 'NOWHERE'}")
-        logger.info(f"DETAILED DEBUG: Extracted {len(specialties)} specialties: {specialties}")
+        # Include the full detailed analysis
+        simplified_result["detailed_analysis"] = result
         
-        # Extract top specialties if any exist
-        if specialties:
-            top_specialties = [s.get("specialty", "") or s.get("name", "") for s in specialties[:3] if (s.get("specialty") or s.get("name"))]
-            logger.info(f"DETAILED DEBUG: Top specialties: {top_specialties}")
-        else:
-            logger.info(f"DETAILED DEBUG: No specialties found to extract")
+        logger.info(f"DETAILED DEBUG: Final simplified result: {simplified_result}")
         
-        simplified = {
-            "symptoms_detected": detected_symptoms,
-            "top_specialties": top_specialties,
-            "detailed_analysis": result
-        }
+        # Ensure the function has a name attribute that matches its actual name
+        analyze_symptoms.__name__ = "analyze_symptoms"
         
-        logger.info(f"DETAILED DEBUG: Final simplified result: {simplified}")
-        
-        return simplified
+        return simplified_result
     except Exception as e:
-        logger.error(f"DETAILED DEBUG: Error in analyze_symptoms: {str(e)}", exc_info=True)
-        # Return a standardized error response
+        logger.error(f"Error in symptom analysis: {str(e)}", exc_info=True)
         return {
             "error": str(e),
-            "query": symptom_description,
-            "specialties": []
+            "symptoms_detected": [],
+            "top_specialties": [],
+            "detailed_analysis": {"error": str(e)}
         }
 
 # Create a StructuredTool for symptom analysis
