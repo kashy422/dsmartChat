@@ -32,6 +32,24 @@ import datetime
 from pydantic import BaseModel
 from sqlalchemy import text
 
+# Add a global json configuration to ensure Arabic text is properly handled
+def setup_json_config():
+    """Configure JSON to properly handle Arabic text by default"""
+    # Store the original dumps function
+    _original_dumps = json.dumps
+    
+    def _patched_dumps(obj, **kwargs):
+        # Always ensure Arabic characters are preserved
+        if 'ensure_ascii' not in kwargs:
+            kwargs['ensure_ascii'] = False
+        return _original_dumps(obj, **kwargs)
+    
+    # Replace the standard dumps function with our patched version
+    json.dumps = _patched_dumps
+
+# Apply the JSON configuration at module import time
+setup_json_config()
+
 from .agent_tools import (
     store_patient_details_tool,
     store_patient_details,
