@@ -211,7 +211,8 @@ def detect_symptoms_and_specialties(user_message: str) -> Dict[str, Any]:
            - Operations they are interested in
            - Procedures they are asking about
            - Conditions they are inquiring about
-        5. Use ALL of the above to match the user to the most appropriate specialties.
+        5. If the user is describing symtoms that are not in the database and are not matched with our database specialities, return the speciality_not_available as true.
+        6. Use ALL of the above to match the user to the most appropriate specialties.
         
         IMPORTANT NOTES:
         - Common greeting phrases like "hello", "hi", "hey", "salam", "marhaba", etc. are NOT symptom descriptions
@@ -234,10 +235,12 @@ def detect_symptoms_and_specialties(user_message: str) -> Dict[str, Any]:
         - Use EXACT names of specialties and subspecialties as they appear in the database
         - Do NOT invent or suggest specialties not in the database
         - Assign realistic confidence levels (higher for clearer matches)
+
         
         RESPONSE FORMAT:
         Return a JSON object with these fields:
-        - is_describing_symptoms: boolean (true if message describes symptoms OR asks about procedures/conditions)
+        - is_describing_symptoms: boolean (true if message describes symptoms OR asks about procedures/conditions) (false if it is a greeting or a message that is not describing symptoms or speciality not available in our speciality list provided above)
+        - speciality_not_available: boolean (true if no matching specialties found in database).
         
         If is_describing_symptoms is true, also include:
         - detected_symptoms: List of all identified symptoms, procedures, conditions, and health concerns
@@ -271,10 +274,34 @@ def detect_symptoms_and_specialties(user_message: str) -> Dict[str, Any]:
         result_json = response.choices[0].message.content
         logger.info(f"SYMPTOM ANALYZER: Processing GPT response")
         result = json.loads(result_json)
+
+
+        print("-----------------RESULT OF SYMTOMP TOOL----------------")
+        print(result)
+        print("--------------------------------------------------------")
         
         # Check if the message is describing symptoms
         is_describing_symptoms = result.get("is_describing_symptoms", False)
         logger.info(f"SYMPTOM ANALYZER: Message {'' if is_describing_symptoms else 'is not '}describing symptoms")
+        
+        # Check if specialty is not available in the database (important new flag)
+        speciality_not_available = result.get("speciality_not_available", False)
+        if speciality_not_available:
+            logger.warning("SYMPTOM ANALYZER: User described symptoms that don't match any specialties in our database")
+            
+            # Create result with the speciality_not_available flag
+            return {
+                "status": "no_matching_specialty",
+                "is_describing_symptoms": True,
+                "speciality_not_available": True,
+                "symptom_analysis": {
+                    "detected_symptoms": result.get("detected_symptoms", []),
+                    "speciality_not_available": True,
+                    "message": "The described symptoms don't match any specialty in our database."
+                },
+                "specialties": [],
+                "processing_time": f"{time.time() - start_time:.2f}s"
+            }
         
         if not is_describing_symptoms:
             # If not describing symptoms, return early
@@ -307,15 +334,22 @@ def detect_symptoms_and_specialties(user_message: str) -> Dict[str, Any]:
                 # Log each specialty match with confidence score
                 logger.info(f"SYMPTOM ANALYZER: Matched specialty: {specialty_name}/{subspecialty_name} (confidence: {confidence:.2f})")
         
-        # Log if no specialties were found
+        # Log if no specialties were found and mark as speciality_not_available
         if not specialties:
             logger.warning("SYMPTOM ANALYZER: No matching specialties found for the detected symptoms")
+            speciality_not_available = True
+        else:
+            speciality_not_available = False
         
         # Create final result
         analysis_result = {
             "status": "success",
             "is_describing_symptoms": True,
-            "symptom_analysis": result,
+            "speciality_not_available": speciality_not_available,
+            "symptom_analysis": {
+                **result,
+                "speciality_not_available": speciality_not_available
+            },
             "specialties": specialties,
             "processing_time": f"{time.time() - start_time:.2f}s"
         }
