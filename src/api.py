@@ -2,6 +2,7 @@ import tempfile
 import os
 import time
 import logging
+import json
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -20,6 +21,38 @@ import re
 from .agent_tools import analyze_symptoms, dynamic_doctor_search, store_patient_details
 from .query_builder_agent import unified_doctor_search, unified_doctor_search_tool, extract_search_criteria_tool
 from .specialty_matcher import SpecialtyDataCache, get_recommended_specialty
+
+# Create a custom JSON encoder class to handle Arabic text properly
+class ArabicJSONEncoder(json.JSONEncoder):
+    def encode(self, obj):
+        return super().encode(obj)
+
+# Store the original json.dumps function before replacing it
+_original_json_dumps = json.dumps
+
+# Override the default json.dumps function to ensure Arabic characters are properly handled
+def arabic_json_dumps(obj, **kwargs):
+    """
+    Custom JSON dumps function that ensures Arabic characters are properly encoded
+    without being converted to Unicode escape sequences.
+    """
+    # Always set ensure_ascii=False to preserve Arabic characters
+    kwargs['ensure_ascii'] = False
+    return _original_json_dumps(obj, **kwargs)
+
+# Replace the standard json.dumps with our custom function
+json.dumps = arabic_json_dumps
+
+# Define a custom JSONResponse class that uses our encoder
+class ArabicJSONResponse(JSONResponse):
+    def render(self, content: Any) -> bytes:
+        return json.dumps(
+            content,
+            ensure_ascii=False,  # This is crucial for Arabic text
+            allow_nan=False,
+            indent=None,
+            separators=(",", ":"),
+        ).encode("utf-8")
 
 # Set up improved logging at startup
 setup_improved_logging()
@@ -55,7 +88,8 @@ except Exception as e:
 #    directly to the query builder rather than just using natural language
 # 4. This ensures consistent specialty mapping between symptom analysis and doctor search
 
-app = FastAPI()
+# Create FastAPI app with our custom JSON response class as default
+app = FastAPI(default_response_class=ArabicJSONResponse)
 engine = chat_engine()
 callBackHandler = CustomCallBackHandler()
 encryptor = AESEncryptor(os.getenv("ENCRYPTION_SALT", "default_salt"))

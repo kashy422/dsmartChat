@@ -32,6 +32,24 @@ import datetime
 from pydantic import BaseModel
 from sqlalchemy import text
 
+# Add a global json configuration to ensure Arabic text is properly handled
+def setup_json_config():
+    """Configure JSON to properly handle Arabic text by default"""
+    # Store the original dumps function
+    _original_dumps = json.dumps
+    
+    def _patched_dumps(obj, **kwargs):
+        # Always ensure Arabic characters are preserved
+        if 'ensure_ascii' not in kwargs:
+            kwargs['ensure_ascii'] = False
+        return _original_dumps(obj, **kwargs)
+    
+    # Replace the standard dumps function with our patched version
+    json.dumps = _patched_dumps
+
+# Apply the JSON configuration at module import time
+setup_json_config()
+
 from .agent_tools import (
     store_patient_details_tool,
     store_patient_details,
@@ -702,7 +720,7 @@ def chat_engine():
                     "required": []
                 },
                 "analyze_symptoms": {
-                    "description": "Analyze patient symptoms to match with appropriate medical specialties. IMPORTANT: ALWAYS use this tool BEFORE searching for doctors whenever the user describes ANY symptoms or health concerns. This should be used AFTER storing patient details but BEFORE searching for doctors.",
+                    "description": "Analyze patient symptoms to match with appropriate medical specialties. IMPORTANT: ALWAYS use this tool BEFORE searching for doctors whenever the user describes ANY symptoms or health concerns. This should be used AFTER storing patient details but BEFORE searching for doctors. If the we dont have the speciality for the symptomps the user is describing than simply respond with a message that we are currently certifying doctors and expanding our network.",
                     "params": {
                         "symptom_description": "Description of symptoms or health concerns"
                     },
@@ -1652,6 +1670,85 @@ When responding:
                                     "name": function_name
                                 })
                                 
+                                # Check if specialty is not available in our database
+                                speciality_not_available = False
+                                if "speciality_not_available" in symptom_result and symptom_result["speciality_not_available"]:
+                                    speciality_not_available = True
+                                elif "detailed_analysis" in symptom_result and "speciality_not_available" in symptom_result["detailed_analysis"]:
+                                    speciality_not_available = symptom_result["detailed_analysis"]["speciality_not_available"]
+                                elif "detailed_analysis" in symptom_result and "symptom_analysis" in symptom_result["detailed_analysis"] and "speciality_not_available" in symptom_result["detailed_analysis"]["symptom_analysis"]:
+                                    speciality_not_available = symptom_result["detailed_analysis"]["symptom_analysis"]["speciality_not_available"]
+                                
+                                # If specialty is not available, create a special message
+                                if speciality_not_available:
+                                    logger.info(f"⚠️ Specialty not available in database for the described symptoms")
+                                    
+                                    # Get symptom description for context
+                                    symptoms_text = ""
+                                    if "symptoms_detected" in symptom_result and symptom_result["symptoms_detected"]:
+                                        symptoms_text = ", ".join(symptom_result["symptoms_detected"])
+                                    
+                                    # Generate a dynamic response using the main LLM instead of hardcoded text
+                                    # This will match the user's language style and be more personalized
+                                    logger.info(f"Generating dynamic response for specialty not available with symptoms: {symptoms_text or issue}")
+                                    
+                                    # Create a prompt that instructs the LLM to generate an appropriate response
+                                    # Get the last few messages to maintain conversation context and language
+                                    recent_messages = []
+                                    for msg in history.messages[-4:]:
+                                        if msg['type'] == 'human':
+                                            recent_messages.append({"role": "user", "content": msg['content']})
+                                        elif msg['type'] == 'ai':
+                                            recent_messages.append({"role": "assistant", "content": msg['content']})
+                                    
+                                    # Create a prompt for the dynamic response
+                                    dynamic_response = client.chat.completions.create(
+                                        model="gpt-4o-mini-2024-07-18",
+                                        messages=[
+                                            {"role": "system", "content": f"""
+                                            You are a helpful medical assistant. The user has described symptoms that don't match any specialty in our current database.
+                                            
+                                            The symptoms they described are: {symptoms_text or issue}
+                                            
+                                            Generate a thoughtful, empathetic response that:
+                                            1. Acknowledges their specific symptoms in a natural way
+                                            2. Explains that we're expanding our network of specialists
+                                            3. Suggests they check back later or provide more details
+                                            4. Maintains the same language, tone and style the user is using
+                                            5. Is conversational and helpful
+                                            
+                                            DO NOT include any placeholders or template-like text.
+                                            DO NOT mention that you've been instructed to create this message.
+                                            DO match the user's language (English, Arabic, etc.) from the conversation.
+                                            """},
+                                            *recent_messages
+                                        ]
+                                    )
+                                    
+                                    # Extract the generated content
+                                    content = dynamic_response.choices[0].message.content
+                                    
+                                    # Print the final response for debugging
+                                    print(f"\n{'='*80}\nDYNAMIC RESPONSE FOR UNAVAILABLE SPECIALTY:\n{content}\n{'='*80}\n")
+                                    
+                                    # Update the message history
+                                    if len(history.messages) > 0 and history.messages[-1]['type'] == 'ai':
+                                        history.messages.pop()  # Remove the tool call message
+                                    history.add_ai_message(content)  # Add the final response
+                                    
+                                    # Create the response object
+                                    response_object = {
+                                        "response": {
+                                            "message": content,
+                                            "patient": patient_data or {"session_id": session_id},
+                                            "data": [],
+                                            "specialty_not_available": True
+                                        },
+                                        "display_results": False
+                                    }
+                                    
+                                    return response_object
+                                
                                 # If specialties were detected, automatically trigger doctor search
                                 specialties = []
                                 if symptom_result:
@@ -1708,6 +1805,105 @@ When responding:
                         
                         # Get updated context with latest doctor search results
                         updated_context_messages = self.sync_session_history(session_id)
+                        
+                        # Check if specialty_not_available was set during symptom analysis
+                        specialty_not_available = False
+                        
+                        # Look for symptom analysis results
+                        symptom_result = history.get_symptom_analysis()
+                        if symptom_result:
+                            # Check different possible locations of the flag
+                            if "speciality_not_available" in symptom_result and symptom_result["speciality_not_available"]:
+                                specialty_not_available = True
+                            elif "detailed_analysis" in symptom_result and "speciality_not_available" in symptom_result["detailed_analysis"]:
+                                specialty_not_available = symptom_result["detailed_analysis"]["speciality_not_available"]
+                            elif "detailed_analysis" in symptom_result and "symptom_analysis" in symptom_result["detailed_analysis"] and "speciality_not_available" in symptom_result["detailed_analysis"]["symptom_analysis"]:
+                                specialty_not_available = symptom_result["detailed_analysis"]["symptom_analysis"]["speciality_not_available"]
+                        
+                        # Get symptoms text for context
+                        symptoms_text = ""
+                        if symptom_result and "symptoms_detected" in symptom_result and symptom_result["symptoms_detected"]:
+                            symptoms_text = ", ".join(symptom_result["symptoms_detected"])
+                        elif history.get_patient_data() and "Issue" in history.get_patient_data():
+                            symptoms_text = history.get_patient_data()["Issue"]
+                        
+                        # If specialty not available, provide a specific response
+                        if specialty_not_available:
+                            logger.info(f"⚠️ Handling final response for unavailable specialty: {symptoms_text}")
+                            
+                            # Get issue from patient data
+                            issue = "your symptoms"
+                            if history.get_patient_data() and "Issue" in history.get_patient_data():
+                                issue = history.get_patient_data()["Issue"]
+                                # Make sure the issue is not showing as JSON
+                                if issue.startswith("{") and issue.endswith("}"):
+                                    try:
+                                        issue_json = json.loads(issue)
+                                        if "Issue" in issue_json:
+                                            issue = issue_json["Issue"]
+                                    except:
+                                        pass
+                            
+                            # Generate a dynamic response using the main LLM instead of hardcoded text
+                            # This will match the user's language style and be more personalized
+                            logger.info(f"Generating dynamic response for specialty not available with symptoms: {symptoms_text or issue}")
+                            
+                            # Create a prompt that instructs the LLM to generate an appropriate response
+                            # Get the last few messages to maintain conversation context and language
+                            recent_messages = []
+                            for msg in history.messages[-4:]:
+                                if msg['type'] == 'human':
+                                    recent_messages.append({"role": "user", "content": msg['content']})
+                                elif msg['type'] == 'ai':
+                                    recent_messages.append({"role": "assistant", "content": msg['content']})
+                            
+                            # Create a prompt for the dynamic response
+                            dynamic_response = client.chat.completions.create(
+                                model="gpt-4o-mini-2024-07-18",
+                                messages=[
+                                    {"role": "system", "content": f"""
+                                    You are a helpful medical assistant. The user has described symptoms that don't match any specialty in our current database.
+                                    
+                                    The symptoms they described are: {symptoms_text or issue}
+                                    
+                                    Generate a thoughtful, empathetic response that:
+                                    1. Acknowledges their specific symptoms in a natural way
+                                    2. Explains that we're expanding our network of specialists
+                                    3. Suggests they check back later or provide more details
+                                    4. Maintains the same language, tone and style the user is using
+                                    5. Is conversational and helpful
+                                    
+                                    DO NOT include any placeholders or template-like text.
+                                    DO NOT mention that you've been instructed to create this message.
+                                    DO match the user's language (English, Arabic, etc.) from the conversation.
+                                    """},
+                                    *recent_messages
+                                ]
+                            )
+                            
+                            # Extract the generated content
+                            content = dynamic_response.choices[0].message.content
+                            
+                            # Print the final response for debugging
+                            print(f"\n{'='*80}\nDYNAMIC RESPONSE FOR UNAVAILABLE SPECIALTY:\n{content}\n{'='*80}\n")
+                            
+                            # Update the message history
+                            if len(history.messages) > 0 and history.messages[-1]['type'] == 'ai':
+                                history.messages.pop()  # Remove the tool call message
+                            history.add_ai_message(content)  # Add the final response
+                            
+                            # Create the response object
+                            response_object = {
+                                "response": {
+                                    "message": content,
+                                    "patient": patient_data or {"session_id": session_id},
+                                    "data": [],
+                                    "specialty_not_available": True
+                                },
+                                "display_results": False
+                            }
+                            
+                            return response_object
                         
                         # Re-apply doctor search context if available
                         doctor_search_result = None

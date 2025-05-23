@@ -14,6 +14,23 @@ import pandas as pd
 from decimal import Decimal
 import re
 
+# Configure JSON to properly handle Arabic text
+def setup_json_config():
+    """Configure JSON to properly handle Arabic text by default"""
+    # Store the original dumps function
+    _original_dumps = json.dumps
+    
+    def _patched_dumps(obj, **kwargs):
+        # Always ensure Arabic characters are preserved
+        if 'ensure_ascii' not in kwargs:
+            kwargs['ensure_ascii'] = False
+        return _original_dumps(obj, **kwargs)
+    
+    # Replace the standard dumps function with our patched version
+    json.dumps = _patched_dumps
+
+# Apply the JSON configuration at module import time
+setup_json_config()
 
 # Initialize logger
 logger = logging.getLogger(__name__)

@@ -320,6 +320,32 @@ def analyze_symptoms(symptom_description: str) -> Dict[str, Any]:
         # Create a simpler output format
         simplified_result = {}
         
+        # Check if specialty is not available in database
+        speciality_not_available = False
+        if "symptom_analysis" in result and "speciality_not_available" in result["symptom_analysis"]:
+            speciality_not_available = result["symptom_analysis"]["speciality_not_available"]
+        elif "speciality_not_available" in result:
+            speciality_not_available = result["speciality_not_available"]
+        elif "status" in result and result["status"] == "no_matching_specialty":
+            speciality_not_available = True
+            
+        # Add the flag to the simplified result
+        simplified_result["speciality_not_available"] = speciality_not_available
+        
+        if speciality_not_available:
+            logger.info(f"DETAILED DEBUG: Specialty not available in database for the described symptoms")
+            
+            # Return early with only detected symptoms but no specialties
+            simplified_result["symptoms_detected"] = result.get("symptom_analysis", {}).get("detected_symptoms", [])
+            if not simplified_result["symptoms_detected"] and "detected_symptoms" in result:
+                simplified_result["symptoms_detected"] = result["detected_symptoms"]
+                
+            simplified_result["top_specialties"] = []
+            simplified_result["detailed_analysis"] = result
+            
+            logger.info(f"DETAILED DEBUG: Final simplified result for unmatched symptoms: {simplified_result}")
+            return simplified_result
+        
         # Extract detected symptoms
         symptoms_detected = []
         if "symptom_analysis" in result and "detected_symptoms" in result["symptom_analysis"]:
