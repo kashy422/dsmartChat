@@ -64,7 +64,7 @@ class SearchCriteria(BaseModel):
 
 def build_query(criteria: SearchCriteria) -> Tuple[str, Dict[str, Any]]:
     """
-    Build parameters for SpDyamicQueryBuilderLatLng stored procedure
+    Build parameters for Sp_IntelligentSearch stored procedure
     
     Args:
         criteria: SearchCriteria object containing search parameters
@@ -95,12 +95,12 @@ def build_query(criteria: SearchCriteria) -> Tuple[str, Dict[str, Any]]:
         # Hospital/branch name search
         if criteria.branch_name:
             branch_name = criteria.branch_name.replace("'", "''")
-            where_conditions.append(f"AND (b.BranchName_en LIKE N'%{branch_name}%' OR b.BranchName_ar LIKE N'%{branch_name}%')")
+            where_conditions.append(f"AND (bg.BranchName_en LIKE N'%{branch_name}%' OR bg.BranchName_ar LIKE N'%{branch_name}%')")
             
         # Hospital name (if different from branch name)
         if criteria.hospital_name and criteria.hospital_name != criteria.branch_name:
             hospital_name = criteria.hospital_name.replace("'", "''")
-            where_conditions.append(f"AND (b.BranchName_en LIKE N'%{hospital_name}%' OR b.BranchName_ar LIKE N'%{hospital_name}%')")
+            where_conditions.append(f"AND (bg.BranchName_en LIKE N'%{hospital_name}%' OR bg.BranchName_ar LIKE N'%{hospital_name}%')")
         
         # Specialty and subspecialty search
         if criteria.speciality:
@@ -112,12 +112,12 @@ def build_query(criteria: SearchCriteria) -> Tuple[str, Dict[str, Any]]:
                 
                 # Use a combined search that looks for the specialty in the Specialty field
                 # and the subspecialty in the Subspecialities field
-                where_conditions.append(f"AND (le.Specialty LIKE N'%{specialty_value}%' AND ds.Subspecialities LIKE N'%{subspecialty_value}%')")
-                logger.info(f"Added combined specialty+subspecialty filter: (le.Specialty LIKE N'%{specialty_value}%' AND ds.Subspecialities LIKE N'%{subspecialty_value}%')")
+                where_conditions.append(f"AND (le.Specialty LIKE N'%{specialty_value}%' AND s.SubSpeciality LIKE N'%{subspecialty_value}%')")
+                logger.info(f"Added combined specialty+subspecialty filter: (le.Specialty LIKE N'%{specialty_value}%' AND s.SubSpeciality LIKE N'%{subspecialty_value}%')")
             else:
                 # If no subspecialty, search for the specialty in both fields
-                where_conditions.append(f"AND (le.Specialty LIKE N'%{specialty_value}%' OR ds.Subspecialities LIKE N'%{specialty_value}%')")
-                logger.info(f"Added specialty-only filter: (le.Specialty LIKE N'%{specialty_value}%' OR ds.Subspecialities LIKE N'%{specialty_value}%')")
+                where_conditions.append(f"AND (le.Specialty LIKE N'%{specialty_value}%' OR s.SubSpeciality LIKE N'%{specialty_value}%')")
+                logger.info(f"Added specialty-only filter: (le.Specialty LIKE N'%{specialty_value}%' OR s.SubSpeciality LIKE N'%{specialty_value}%')")
         
         # Handle subspecialty without specialty (rare case)
         elif criteria.subspeciality:
@@ -130,12 +130,12 @@ def build_query(criteria: SearchCriteria) -> Tuple[str, Dict[str, Any]]:
             
             if criteria.subspeciality in dental_subspecialties:
                 # For dental subspecialties, search for dentistry in Specialty and the subspecialty in Subspecialities
-                where_conditions.append(f"AND (le.Specialty LIKE N'%dentist%' AND ds.Subspecialities LIKE N'%{subspecialty_value}%')")
-                logger.info(f"Added dental subspecialty filter: (le.Specialty LIKE N'%dentist%' AND ds.Subspecialities LIKE N'%{subspecialty_value}%')")
+                where_conditions.append(f"AND (le.Specialty LIKE N'%dentist%' AND s.SubSpeciality LIKE N'%{subspecialty_value}%')")
+                logger.info(f"Added dental subspecialty filter: (le.Specialty LIKE N'%dentist%' AND s.SubSpeciality LIKE N'%{subspecialty_value}%')")
             else:
                 # For non-dental subspecialties, just search for the subspecialty in the Subspecialities field
-                where_conditions.append(f"AND (ds.Subspecialities LIKE N'%{subspecialty_value}%')")
-                logger.info(f"Added subspecialty-only filter: (ds.Subspecialities LIKE N'%{subspecialty_value}%')")
+                where_conditions.append(f"AND (s.SubSpeciality LIKE N'%{subspecialty_value}%')")
+                logger.info(f"Added subspecialty-only filter: (s.SubSpeciality LIKE N'%{subspecialty_value}%')")
         
         # Rating filter
         if criteria.min_rating is not None:
@@ -174,7 +174,7 @@ def build_query(criteria: SearchCriteria) -> Tuple[str, Dict[str, Any]]:
         logger.info(f"Using coordinates: Lat={params['@Latitude']}, Long={params['@Longitude']}")
         
         # Execute the stored procedure and log the results
-        sp_name = "[dbo].[SpDyamicQueryBuilderLatLng]"
+        sp_name = "[dbo].[Sp_IntelligentSearch]"
         logger.info(f"Executing stored procedure: {sp_name}")
         logger.info(f"With parameters: {params}")
         
