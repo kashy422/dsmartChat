@@ -880,7 +880,7 @@ def chat_engine():
                     messages = self.messages_by_session[session_id]
                     
                     # Get history
-                    history = get_session_history(session_id)
+                    history = get_session_history(session_id) 
                     
                     # Add to appropriate history based on role/type
                     if message['role'] == 'user':
