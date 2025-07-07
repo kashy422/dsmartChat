@@ -54,7 +54,7 @@ class DB:
             params = urllib.parse.quote_plus(
                 f"DRIVER={{ODBC Driver 17 for SQL Server}};"
                 f"SERVER={os.getenv('DB_HOST')};"
-                f"DATABASE={os.getenv("DB_DATABASE")};"
+                f"DATABASE={os.getenv('DB_DATABASE')};"
                 f"UID={os.getenv('DB_USER')};"
                 f"PWD={os.getenv('DB_PASSWORD')};"
                 f"TrustServerCertificate=yes"
@@ -63,7 +63,7 @@ class DB:
             # Create SQLAlchemy connection string
             connection_string = f"mssql+pyodbc:///?odbc_connect={params}"
 
-            test_db_url = "mssql+pyodbc://@(localdb)\\MSSQLLocalDB/DrAide_Prod_Bk?driver=ODBC+Driver+17+for+SQL+Server&trusted_connection=yes"
+            test_db_url = "mssql+pyodbc://@(localdb)\\MSSQLLocalDB/DSmart_Prod?driver=ODBC+Driver+17+for+SQL+Server&trusted_connection=yes"
 
             
             # Configure connection pooling for better performance

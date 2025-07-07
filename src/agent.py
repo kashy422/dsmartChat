@@ -680,6 +680,35 @@ def simplify_doctor_message(response_object, logger):
     
     return response_object
 
+def format_fee_as_sar(fee_value):
+    """
+    Format fee value to always display as Saudi Riyal (SAR)
+    
+    Args:
+        fee_value: The fee value from database (could be string, float, or int)
+        
+    Returns:
+        Formatted fee string in SAR
+    """
+    try:
+        if fee_value is None or fee_value == "":
+            return "Contact for pricing"
+        
+        # Convert to string and clean up
+        fee_str = str(fee_value).strip()
+        
+        # Remove any existing currency symbols or text
+        fee_str = re.sub(r'[^\d.]', '', fee_str)
+        
+        # Convert to float
+        fee_float = float(fee_str)
+        
+        # Format as SAR
+        return f"{fee_float:.0f} SAR"
+        
+    except (ValueError, TypeError):
+        return "Contact for pricing"
+
 def chat_engine():
     """
     Create a chat engine with tools for patient details, symptom analysis, and doctor search.
@@ -1401,7 +1430,7 @@ def chat_engine():
                                 "subspecialty": doctor.get("Subspecialities", ""),
                                 "hospital": doctor.get("Branch_en", ""),
                                 "rating": doctor.get("Rating", ""),
-                                "fee": doctor.get("Fee", ""),
+                                "fee": format_fee_as_sar(doctor.get("Fee", "")),
                                 "gender": doctor.get("Gender", ""),
                                 "experience": doctor.get("Experience", ""),
                                 "distance": doctor.get("Distance", "")
@@ -1653,7 +1682,7 @@ When responding:
                                         "name": function_name
                                     })
                             elif function_name == "analyze_symptoms":
-                                logger.info(f"🩺 Analyzing symptoms: {function_args}")
+                                logger.info(f"�� Analyzing symptoms: {function_args}")
                                 symptom_description = function_args.get('symptom_description', '')
                                 
                                 # Call symptom analysis
@@ -1947,7 +1976,7 @@ When responding:
                                     "subspecialty": doctor.get("Subspecialities", ""),
                                     "hospital": doctor.get("Branch_en", ""),
                                         "rating": doctor.get("Rating", ""),
-                                        "fee": doctor.get("Fee", ""),
+                                        "fee": format_fee_as_sar(doctor.get("Fee", "")),
                                     "gender": doctor.get("Gender", ""),
                                     "experience": doctor.get("Experience", ""),
                                     "distance": doctor.get("Distance", "")
