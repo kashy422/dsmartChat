@@ -63,12 +63,12 @@ class DB:
             # Create SQLAlchemy connection string
             connection_string = f"mssql+pyodbc:///?odbc_connect={params}"
 
-            test_db_url = "mssql+pyodbc://@(localdb)\\MSSQLLocalDB/DSmart_Prod?driver=ODBC+Driver+17+for+SQL+Server&trusted_connection=yes"
+            test_db_url = "mssql+pyodbc://@(localdb)\\MSSQLLocalDB/DSmart_Prod_new?driver=ODBC+Driver+17+for+SQL+Server&trusted_connection=yes"
 
             
             # Configure connection pooling for better performance
             self.engine = create_engine(
-                connection_string,
+                test_db_url,
                 pool_pre_ping=True,  # Validates connections before using them
                 pool_size=10,
                 max_overflow=20,
@@ -324,13 +324,29 @@ class DB:
         try:
             logger.info(f"Executing stored procedure {proc_name} with params: {params}")
             
+            # Debug: Log each parameter value and its type
+            logger.info("DEBUG: Parameter types:")
+            for k, v in params.items():
+                logger.info(f"  {k}: {v} (type: {type(v)})")
+                if isinstance(v, dict):
+                    logger.error(f"  ERROR: {k} is a dictionary: {v}")
+            
             # Build the EXEC statement with proper quoting for string parameters
             param_parts = []
             for k, v in params.items():
-                if isinstance(v, str):
+                if v is None:
+                    # Handle None values by passing NULL
+                    param_parts.append(f"{k}=NULL")
+                elif isinstance(v, str):
                     # For string parameters, escape any single quotes by doubling them
                     # and wrap the entire value in single quotes
                     escaped_value = v.replace("'", "''")
+                    param_parts.append(f"{k}=N'{escaped_value}'")
+                elif isinstance(v, dict):
+                    # Handle dictionary values by converting to string representation
+                    logger.warning(f"Converting dictionary parameter {k} to string: {v}")
+                    dict_str = str(v)
+                    escaped_value = dict_str.replace("'", "''")
                     param_parts.append(f"{k}=N'{escaped_value}'")
                 else:
                     param_parts.append(f"{k}={v}")
@@ -360,23 +376,52 @@ class DB:
                 # Add detailed logging to inspect the data structure
                 if rows:
                     logger.info(f"Sample first row keys: {list(rows[0].keys())}")
-                    logger.info(f"Returning rows as direct result (not nested in 'data.doctors')")
                     
-                    # Format the response to match what unified_doctor_search expects
-                    result_dict = {
-                        "data": {
-                            "doctors": rows
+                    # Check if this is offers data or doctors data based on the keys
+                    first_row = rows[0]
+                    is_offers_data = 'OfferId' in first_row
+                    is_doctors_data = 'DoctorId' in first_row
+                    
+                    logger.info(f"Data type detection: is_offers_data={is_offers_data}, is_doctors_data={is_doctors_data}")
+                    
+                    if is_offers_data:
+                        # This is offers data, return in data.offers structure
+                        result_dict = {
+                            "data": {
+                                "doctors": [],
+                                "offers": rows
+                            }
                         }
-                    }
-                    logger.info(f"Formatted result with data.doctors structure containing {len(rows)} doctors")
-                    return result_dict
+                        logger.info(f"Formatted result with data.offers structure containing {len(rows)} offers")
+                        return result_dict
+                    elif is_doctors_data:
+                        # This is doctors data, return in data.doctors structure
+                        result_dict = {
+                            "data": {
+                                "doctors": rows,
+                                "offers": []
+                            }
+                        }
+                        logger.info(f"Formatted result with data.doctors structure containing {len(rows)} doctors")
+                        return result_dict
+                    else:
+                        # Unknown data type, default to doctors structure
+                        logger.warning(f"Unknown data type, defaulting to doctors structure. Keys: {list(first_row.keys())}")
+                        result_dict = {
+                            "data": {
+                                "doctors": rows,
+                                "offers": []
+                            }
+                        }
+                        logger.info(f"Formatted result with default data.doctors structure containing {len(rows)} items")
+                        return result_dict
                 else:
                     logger.info("No rows returned, returning empty result dict")
-                    return {"data": {"doctors": []}}
+                    return {"data": {"doctors": [], "offers": []}}
                 
         except Exception as e:
             logger.error(f"Error executing stored procedure: {str(e)}")
-            return {"data": {"doctors": []}}  # Return structured empty result
+            return {"data": {"doctors": [], "offers": []}}  # Return structured empty result
 
     def execute_query(self, query: str, params: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """

@@ -257,6 +257,145 @@ def normalize_specialty(specialty_name: str) -> dict:
     logger.info(f"SPECIALTY: No mapping found for '{specialty_name}', keeping as is")
     return {"specialty": specialty_name}
 
+def extract_processed_criteria(search_criteria: Union[dict, str]) -> Dict[str, Any]:
+    """
+    Extract processed search criteria from the unified search function.
+    This function processes the search criteria the same way as unified_doctor_search
+    but returns the processed criteria instead of executing the search.
+    
+    Args:
+        search_criteria: The search criteria to process
+        
+    Returns:
+        Dictionary containing the processed search criteria
+    """
+    logger.info(f"EXTRACTING CRITERIA: Processing search criteria: {search_criteria}")
+    
+    # Initialize search parameters
+    search_params = {}
+    
+    # Handle different input types
+    if isinstance(search_criteria, str):
+        try:
+            # Try to parse as JSON first
+            json_data = json.loads(search_criteria)
+            if isinstance(json_data, dict):
+                search_params = json_data
+                logger.info(f"EXTRACTING CRITERIA: Parsed JSON search criteria: {search_params}")
+        except json.JSONDecodeError:
+            # If not JSON, treat as natural language query
+            logger.info(f"EXTRACTING CRITERIA: Processing natural language query: '{search_criteria}'")
+            search_params = extract_search_criteria_from_message(search_criteria)
+            logger.info(f"EXTRACTING CRITERIA: Extracted search criteria: {search_params}")
+            
+    elif isinstance(search_criteria, dict):
+        # If it's already a dict, check if it contains a user_message
+        if "user_message" in search_criteria:
+            user_message = search_criteria["user_message"]
+            logger.info(f"EXTRACTING CRITERIA: Found user_message in criteria: '{user_message}'")
+            
+            # Extract search criteria from the user message
+            extracted_criteria = extract_search_criteria_from_message(user_message)
+            logger.info(f"EXTRACTING CRITERIA: Extracted search criteria: {extracted_criteria}")
+            
+            # Check if we extracted both specialty and subspecialty
+            if "speciality" in extracted_criteria and "subspeciality" in extracted_criteria:
+                search_params["speciality"] = extracted_criteria["speciality"]
+                search_params["subspeciality"] = extracted_criteria["subspeciality"]
+                logger.info(f"EXTRACTING CRITERIA: Using both extracted specialty '{extracted_criteria['speciality']}' and subspecialty '{extracted_criteria['subspeciality']}'")
+            
+            # If we only got specialty but not subspecialty
+            elif "speciality" in extracted_criteria:
+                search_params["speciality"] = extracted_criteria["speciality"]
+                # Keep any existing subspecialty from the original criteria
+                if "subspeciality" in search_criteria:
+                    search_params["subspeciality"] = search_criteria["subspeciality"]
+            
+            # If we only got subspecialty but not specialty
+            elif "subspeciality" in extracted_criteria:
+                search_params["subspeciality"] = extracted_criteria["subspeciality"]
+                # Keep any existing specialty from the original criteria
+                if "speciality" in search_criteria:
+                    search_params["speciality"] = search_criteria["speciality"]
+                else:
+                    # Default to dentistry for dental subspecialties
+                    dental_subspecialties = ["Orthodontics", "Endodontics", "Periodontics", "Dental Implants", 
+                                          "Prosthodontics", "Oral Surgery", "Oral and Maxillofacial Surgery",
+                                          "Pediatric Dentistry", "GP", "Dental Hygienist"]
+                    if extracted_criteria["subspeciality"] in dental_subspecialties:
+                        search_params["speciality"] = "dentist"
+                        logger.info(f"EXTRACTING CRITERIA: Added default specialty 'dentist' for dental subspecialty '{extracted_criteria['subspeciality']}'")
+            
+            # Copy over all other extracted criteria
+            for key, value in extracted_criteria.items():
+                if key not in ["speciality", "subspeciality"]:  # We already handled these
+                    search_params[key] = value
+            
+            # Preserve any additional parameters from original criteria
+            for key, value in search_criteria.items():
+                if key != "user_message" and key not in search_params:
+                    search_params[key] = value
+                    
+            # Check if we have symptom analysis data that should override or supplement
+            if hasattr(thread_local, 'symptom_analysis'):
+                symptom_data = thread_local.symptom_analysis
+                logger.info(f"EXTRACTING CRITERIA: Found symptom analysis data to supplement search criteria")
+                
+                # Extract specialties from symptom analysis
+                specialties = []
+                
+                # First check the symptom_analysis structure
+                if 'symptom_analysis' in symptom_data:
+                    sa = symptom_data.get('symptom_analysis', {})
+                    
+                    # Try all possible locations for specialty data
+                    if 'specialties' in sa and sa['specialties']:
+                        specialties = sa['specialties']
+                        logger.info(f"EXTRACTING CRITERIA: Found {len(specialties)} specialties in symptom_analysis.specialties")
+                    elif 'recommended_specialties' in sa and sa['recommended_specialties']:
+                        specialties = sa['recommended_specialties']
+                        logger.info(f"EXTRACTING CRITERIA: Found {len(specialties)} specialties in symptom_analysis.recommended_specialties")
+                
+                # Then check the top-level specialties
+                elif 'specialties' in symptom_data and symptom_data['specialties']:
+                    specialties = symptom_data['specialties']
+                    logger.info(f"EXTRACTING CRITERIA: Found {len(specialties)} specialties at top level of symptom data")
+                
+                # Use the symptom analysis specialty/subspecialty if we found any
+                if specialties and len(specialties) > 0:
+                    top_specialty = specialties[0]
+                    logger.info(f"EXTRACTING CRITERIA: Using top specialty from symptom analysis: {top_specialty}")
+                    
+                    # Add specialty if we don't already have one or override lower confidence specialty
+                    if "speciality" not in search_params and ("specialty" in top_specialty or "name" in top_specialty):
+                        specialty_name = top_specialty.get("specialty") or top_specialty.get("name")
+                        if specialty_name:
+                            search_params["speciality"] = specialty_name
+                            logger.info(f"EXTRACTING CRITERIA: Added specialty '{specialty_name}' from symptom analysis")
+                    
+                    # Add subspecialty if we don't already have one or override lower confidence subspecialty
+                    if "subspeciality" not in search_params and "subspecialty" in top_specialty:
+                        subspecialty_name = top_specialty.get("subspecialty")
+                        if subspecialty_name:
+                            search_params["subspeciality"] = subspecialty_name
+                            logger.info(f"EXTRACTING CRITERIA: Added subspecialty '{subspecialty_name}' from symptom analysis")
+        else:
+            # Use the dictionary as-is
+            search_params = search_criteria
+            logger.info(f"EXTRACTING CRITERIA: Using provided dictionary criteria: {search_params}")
+    
+    # Add coordinates from search params if available
+    lat = search_params.get("latitude")
+    long = search_params.get("longitude")
+    
+    if lat is not None and long is not None:
+        logger.info(f"EXTRACTING CRITERIA: Coordinates - lat: {lat}, long: {long}")
+    else:
+        logger.warning("EXTRACTING CRITERIA: No coordinates provided in search criteria")
+    
+    logger.info(f"EXTRACTING CRITERIA: Final processed criteria: {search_params}")
+    return search_params
+
 def unified_doctor_search(search_criteria: Union[dict, str]) -> dict:
     """Unified doctor search function that handles both structured and natural language queries"""
     logger.info(f"TOOL CALL: unified_doctor_search with input: {search_criteria}")
@@ -546,12 +685,22 @@ def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
              * "مستشفى الملك فهد" -> "مستشفى الملك فهد"
              * "King Fahd Hospital" -> "King Fahd Hospital"
         
-        2. All other fields must be in English:
+        2. Branch/Clinic name extraction for offers:
+           - Pay special attention to offers-related queries
+           - Look for patterns like "offers from [clinic]", "offers at [clinic]", "offers in [clinic]"
+           - Extract the clinic/branch name even if no specialty is mentioned
+           - Examples:
+             * "find me offers from glam clinic" -> branch_name: "glam clinic"
+             * "show offers at King Fahd Hospital" -> branch_name: "King Fahd Hospital"
+             * "offers from dental clinic" -> branch_name: "dental clinic"
+             * "عروض من عيادة الأسنان" -> branch_name: "عيادة الأسنان"
+        
+        3. All other fields must be in English:
            - Specialty: "طبيب أسنان" -> "dentist"
            - Gender: "طبيبة" -> "female", "طبيب" -> "male"
            - Numbers: Use western numerals (1, 2, 3) not Arabic numerals (١، ٢، ٣)
         
-        3. For gender, look for any indication that the user wants only male or female doctors:
+        4. For gender, look for any indication that the user wants only male or female doctors:
            - "only females" or "only males"
            - "female doctors" or "male doctors"
            - "women doctors" or "men doctors"
@@ -561,7 +710,7 @@ def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
            - "دكتور" -> "male"
            - "دكتورة" -> "female"
         
-        4. For specialty and subspecialty detection:
+        5. For specialty and subspecialty detection:
            - ALWAYS detect both specialty and subspecialty when possible
            - For dental-related:
               * Main specialty is ALWAYS "dentist" or "Dentistry"
@@ -581,7 +730,7 @@ def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
               * "I have toothache" -> {"speciality": "dentist", "subspeciality": "Endodontics"}
               * "Looking for a dentist who does braces" -> {"speciality": "dentist", "subspeciality": "Orthodontics"}
            
-        5. Format subspecialty names EXACTLY according to this list for dentistry:
+        6. Format subspecialty names EXACTLY according to this list for dentistry:
            - "Dental Hygienist"
            - "Dental Implants" (not "implants" or "implantology")
            - "Endodontics" (not "endodontist" or "root canal")
@@ -596,7 +745,7 @@ def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
            - "Prosthodontics" (not "prosthodontist")
            - "Temporomandibular Joint TMJ Disorders"
         
-        6. CRITICALLY IMPORTANT - You MUST include both speciality and subspeciality fields when a specific dental procedure is mentioned:
+        7. CRITICALLY IMPORTANT - You MUST include both speciality and subspeciality fields when a specific dental procedure is mentioned:
            * "I need braces" -> {"speciality": "dentist", "subspeciality": "Orthodontics"}
            * "I have tooth pain" -> {"speciality": "dentist", "subspeciality": "Endodontics"}
            * "Where can I get implants" -> {"speciality": "dentist", "subspeciality": "Dental Implants"}

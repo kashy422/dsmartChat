@@ -24,9 +24,9 @@ Follow the instructions on the [official Docker website](https://docs.docker.com
 >> uvicorn src.api:app --host 0.0.0.0 --port 8507 --reload
 ```
 
-## New Features: GPT-powered Doctor Search and Symptom Analysis
+## New Features: GPT-powered Doctor Search, Symptom Analysis, and Offers Search
 
-The application now includes intelligent doctor search and symptom analysis capabilities powered by OpenAI's GPT models.
+The application now includes intelligent doctor search, symptom analysis, and offers search capabilities powered by OpenAI's GPT models.
 
 ### Doctor Search API
 
@@ -46,6 +46,67 @@ The search supports criteria like:
 - Price/fee limits
 - Experience requirements
 - Hospital/clinic name
+
+### Offers Search API
+
+The system now automatically searches for offers in parallel with doctor searches using the `Sp_GetOffersBySpecialityAndLocation` stored procedure. The offers search:
+
+- Executes automatically when searching for doctors
+- Uses the same search criteria (specialty, subspecialty, location, price, branch name)
+- Runs in parallel with the doctor search for better performance
+- **Includes offers results in the API response** alongside doctors data
+- Prints results to the terminal for debugging
+- Supports both Arabic and English branch names
+- Handles NULL parameters when criteria are not provided
+- **Automatically converts "dentist" to "Dentistry"** for proper database compatibility
+- **Enhanced branch name extraction** for offers-specific queries
+
+**API Response Structure:**
+```json
+{
+  "response": {
+    "message": "I found 5 doctors matching your criteria.",
+    "patient": {"session_id": "..."},
+    "data": [...], // Array of doctors
+    "doctor_count": 5,
+    "is_doctor_search": true
+  },
+  "display_results": true,
+  "doctor_count": 5,
+  "offers": [...] // Array of offers (when available)
+}
+```
+
+**Branch Name Extraction Examples:**
+- "find me offers from glam clinic" → `@branchName = 'glam clinic'`
+- "show offers at King Fahd Hospital" → `@branchName = 'King Fahd Hospital'`
+- "dental offers from dental clinic" → `@branchName = 'dental clinic'`
+- "عروض من عيادة الأسنان" → `@branchName = 'عيادة الأسنان'`
+
+**Recent Fixes:**
+- ✅ **Fixed offers not appearing in API response** - Offers are now properly included in the response alongside doctors data
+- ✅ **Enhanced branch name extraction** for offers-specific queries
+- ✅ **Automatic "dentist" to "Dentistry" conversion** for database compatibility
+- ✅ **Fixed offers preservation in agent response compilation** - Offers are now preserved through all response processing stages
+
+Example stored procedure call:
+```sql
+EXEC [dbo].[Sp_GetOffersBySpecialityAndLocation]
+    @speciality = 'Dentistry',
+    @subspeciality = NULL,
+    @lat = '24.7235463896241',
+    @long = '46.7746553134925',
+    @price = NULL,
+    @branchName = 'Glam';
+```
+
+**Note:** When the system detects "dentist" as the specialty (either from natural language processing or structured input), it automatically converts it to "Dentistry" before passing it to the offers stored procedure to ensure proper database compatibility.
+
+**Branch Name Features:**
+- Extracts branch names from offers-specific queries even when no specialty is mentioned
+- Supports both English and Arabic branch names
+- Handles various query patterns like "offers from [clinic]", "offers at [hospital]", etc.
+- Preserves original language (Arabic/English) for branch names
 
 ### Symptom Analysis API
 
