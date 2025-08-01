@@ -139,34 +139,6 @@ def execute_offers_search(search_criteria: Dict[str, Any]) -> Dict[str, Any]:
         
         logger.info("🎁 Offers search completed successfully")
         
-        # Debug: Print the raw database result structure
-        print(f"\n🎁 RAW DATABASE RESULT STRUCTURE:")
-        print(f"Type: {type(offers_result)}")
-        if isinstance(offers_result, dict):
-            print(f"Keys: {list(offers_result.keys())}")
-            for key, value in offers_result.items():
-                print(f"  {key}: {type(value)} - {len(value) if isinstance(value, list) else 'not a list'}")
-                if isinstance(value, list) and value:
-                    print(f"    First item: {value[0]}")
-        else:
-            print(f"Value: {offers_result}")
-        print("🎁 END RAW DATABASE RESULT STRUCTURE\n")
-        logger.info("🎁 Offers result structure: %s", list(offers_result.keys()) if isinstance(offers_result, dict) else "Not a dict")
-        
-        # Debug: Print the exact offers_result for debugging
-        logger.info(f"🎁 DEBUG: Exact offers_result: {offers_result}")
-        if isinstance(offers_result, dict):
-            for key, value in offers_result.items():
-                logger.info(f"🎁 DEBUG: Key '{key}': {type(value)} - {value}")
-                if isinstance(value, list) and value:
-                    logger.info(f"🎁 DEBUG: List '{key}' has {len(value)} items")
-                    if isinstance(value[0], dict):
-                        logger.info(f"🎁 DEBUG: First item in '{key}': {value[0]}")
-                        logger.info(f"🎁 DEBUG: Keys in first item: {list(value[0].keys())}")
-        else:
-            logger.info(f"🎁 DEBUG: offers_result is not a dict, type: {type(offers_result)}")
-            logger.info(f"🎁 DEBUG: offers_result value: {offers_result}")
-        
         # Store the raw offers_result for potential fallback extraction
         raw_offers_result = offers_result
         
@@ -181,14 +153,9 @@ def execute_offers_search(search_criteria: Dict[str, Any]) -> Dict[str, Any]:
         print(f"Branch Name: {branch_name}")
         print("-"*80)
         
-        # Debug: Print the full offers_result structure
-        logger.info(f"🎁 DEBUG: Full offers_result structure: {list(offers_result.keys()) if isinstance(offers_result, dict) else 'Not a dict'}")
-        
         offers_data = []
         if isinstance(offers_result, dict) and 'data' in offers_result:
             offers_data_dict = offers_result.get('data', {})
-            logger.info(f"🎁 DEBUG: offers_data_dict type: {type(offers_data_dict)}")
-            logger.info(f"🎁 DEBUG: offers_data_dict keys: {list(offers_data_dict.keys()) if isinstance(offers_data_dict, dict) else 'Not a dict'}")
             
             if isinstance(offers_data_dict, dict) and 'doctors' in offers_data_dict:
                 # Check if the doctors list contains offer data (has OfferId, OfferName, etc.)
@@ -198,58 +165,34 @@ def execute_offers_search(search_criteria: Dict[str, Any]) -> Dict[str, Any]:
                     if isinstance(first_item, dict) and 'OfferId' in first_item:
                         # This is offers data, not doctors data
                         offers_data = doctors_list
-                        logger.info(f"🎁 DEBUG: Found {len(offers_data)} offers in data.doctors (these are actually offers)")
-                        logger.info(f"🎁 DEBUG: First offer: {first_item.get('OfferName_en', 'Unknown')} (ID: {first_item.get('OfferId', 'Unknown')})")
+                        logger.info(f"🎁 [execute_offers_search] Found {len(offers_data)} offers in data.doctors")
                     else:
-                        logger.info(f"🎁 DEBUG: Found {len(doctors_list)} doctors in data.doctors (not offers)")
+                        logger.info(f"🎁 [execute_offers_search] Found {len(doctors_list)} doctors in data.doctors (not offers)")
                 else:
-                    logger.info(f"🎁 DEBUG: No doctors found in data.doctors")
+                    logger.info(f"🎁 [execute_offers_search] No doctors found in data.doctors")
             elif isinstance(offers_data_dict, list):
                 # If data is directly a list, use it as offers
                 offers_data = offers_data_dict
-                logger.info(f"🎁 DEBUG: Found {len(offers_data)} offers in data (direct list)")
+                logger.info(f"🎁 [execute_offers_search] Found {len(offers_data)} offers in data (direct list)")
             elif isinstance(offers_data_dict, dict):
-                # If data is a dict but doesn't have 'doctors', check if it has any other keys
-                logger.info(f"🎁 DEBUG: Data is dict but no 'doctors' key. Available keys: {list(offers_data_dict.keys())}")
                 # Try to find any list in the data that might be offers
                 for key, value in offers_data_dict.items():
                     if isinstance(value, list):
                         offers_data = value
-                        logger.info(f"🎁 DEBUG: Using {key} as offers data: {len(offers_data)} items")
+                        logger.info(f"🎁 [execute_offers_search] Found offers in key '{key}': {len(offers_data)} items")
                         break
-            else:
-                logger.warning("🎁 DEBUG: Offers data structure not as expected")
-                logger.warning(f"🎁 DEBUG: offers_data_dict: {offers_data_dict}")
         elif isinstance(offers_result, dict):
-            # If no 'data' key, check if the result itself contains offers
-            logger.info(f"🎁 DEBUG: No 'data' key in offers_result. Available keys: {list(offers_result.keys())}")
             # Look for any list in the result that might be offers
             for key, value in offers_result.items():
                 if isinstance(value, list):
                     offers_data = value
-                    logger.info(f"🎁 DEBUG: Using {key} as offers data: {len(offers_data)} items")
+                    logger.info(f"🎁 [execute_offers_search] Found offers in key '{key}': {len(offers_data)} items")
                     break
         else:
-            logger.warning("🎁 DEBUG: Offers result is not a dict or doesn't contain 'data'")
-            logger.warning(f"🎁 DEBUG: offers_result type: {type(offers_result)}")
-        
-        # Since we're seeing offers printed in the terminal, let's check if the offers_result
-        # itself contains the offers data directly
-        if not offers_data and isinstance(offers_result, dict):
-            logger.info(f"🎁 DEBUG: Checking if offers_result contains offers directly")
-            logger.info(f"🎁 DEBUG: offers_result keys: {list(offers_result.keys())}")
-            # Look for any key that might contain offers data
-            for key, value in offers_result.items():
-                if isinstance(value, list) and value:
-                    # Check if this looks like offers data (has OfferId, OfferName, etc.)
-                    if isinstance(value[0], dict) and any(field in value[0] for field in ['OfferId', 'OfferName', 'BeforePrice', 'AfterPrice']):
-                        offers_data = value
-                        logger.info(f"🎁 DEBUG: Found offers data in key '{key}': {len(offers_data)} items")
-                        break
+            logger.warning("🎁 [execute_offers_search] Offers result is not a dict or doesn't contain 'data'")
         
         # If still no offers_data, try to extract from the raw offers_result
         if not offers_data and isinstance(offers_result, dict):
-            logger.info(f"🎁 DEBUG: Final attempt to extract offers from raw offers_result")
             # Look for any list in the entire offers_result structure
             def find_offers_in_dict(data, path=""):
                 if isinstance(data, dict):
@@ -258,7 +201,7 @@ def execute_offers_search(search_criteria: Dict[str, Any]) -> Dict[str, Any]:
                         if isinstance(value, list) and value:
                             # Check if this looks like offers data
                             if isinstance(value[0], dict) and any(field in value[0] for field in ['OfferId', 'OfferName', 'BeforePrice', 'AfterPrice']):
-                                logger.info(f"🎁 DEBUG: Found offers in {current_path}: {len(value)} items")
+                                logger.info(f"🎁 [execute_offers_search] Found offers in {current_path}: {len(value)} items")
                                 return value
                         elif isinstance(value, dict):
                             result = find_offers_in_dict(value, current_path)
@@ -303,21 +246,18 @@ def execute_offers_search(search_criteria: Dict[str, Any]) -> Dict[str, Any]:
         # Return both doctors and offers in a unified structure
         # This ensures both doctors and offers are at the same level
         if offers_data:
-            logger.info(f"🎁 [execute_offers_search] RETURNING: {len(offers_data)} offers in unified structure")
-            logger.info(f"🎁 [execute_offers_search] RETURN DATA: {{'data': {{'doctors': [], 'offers': {len(offers_data)} items}}}}")
+            logger.info(f"🎁 [execute_offers_search] RETURNING: {len(offers_data)} offers")
             result_data = {
                 "data": {
                     "doctors": [],
                     "offers": offers_data
                 }
             }
-            logger.info(f"🎁 [execute_offers_search] FINAL RETURN: {result_data}")
             return result_data
         else:
             # Final fallback: if we still don't have offers_data but we have raw_offers_result,
             # and it contains offers (as evidenced by the terminal print), let's try to extract them
-            logger.info("🎁 [execute_offers_search] No offers_data found, but offers were printed to terminal")
-            logger.info("🎁 [execute_offers_search] Attempting to extract offers from raw_offers_result for return")
+            logger.info("🎁 [execute_offers_search] No offers_data found, trying fallback")
             
             # If raw_offers_result is a dict, look for any list that might be offers
             if isinstance(raw_offers_result, dict):
@@ -325,26 +265,22 @@ def execute_offers_search(search_criteria: Dict[str, Any]) -> Dict[str, Any]:
                     if isinstance(value, list) and value:
                         # Check if this looks like offers data
                         if isinstance(value[0], dict) and any(field in value[0] for field in ['OfferId', 'OfferName', 'BeforePrice', 'AfterPrice']):
-                            logger.info(f"🎁 [execute_offers_search] Fallback: Found {len(value)} offers in key '{key}' for return")
-                            logger.info(f"🎁 [execute_offers_search] RETURNING: {len(value)} offers from fallback")
+                            logger.info(f"🎁 [execute_offers_search] Fallback: Found {len(value)} offers in key '{key}'")
                             result_data = {
                                 "data": {
                                     "doctors": [],
                                     "offers": value
                                 }
                             }
-                            logger.info(f"🎁 [execute_offers_search] FALLBACK RETURN: {result_data}")
                             return result_data
             
             logger.info("🎁 [execute_offers_search] No offers data found, returning empty structure")
-            logger.info("🎁 [execute_offers_search] RETURN DATA: {{'data': {{'doctors': [], 'offers': []}}}}")
             result_data = {
                 "data": {
                     "doctors": [],
                     "offers": []
                 }
             }
-            logger.info(f"🎁 [execute_offers_search] EMPTY RETURN: {result_data}")
             return result_data
         
     except Exception as e:
@@ -442,9 +378,156 @@ def dynamic_doctor_search(search_query: Union[str, dict]) -> dict:
     clear_symptom_analysis_data("starting new direct search")
     
     try:
-        # Extract search criteria for both doctor search and offers search
+        # Check if this is an offers-only query
+        is_offers_only = False
+        user_message = ""
+        
+        # Extract user message from search query
+        if isinstance(search_query, str):
+            try:
+                criteria_dict = json.loads(search_query)
+                user_message = criteria_dict.get("user_message", "").lower()
+            except json.JSONDecodeError:
+                user_message = search_query.lower()
+        elif isinstance(search_query, dict):
+            user_message = search_query.get("user_message", "").lower()
+        
+        # Check for offers-specific keywords in English and Arabic
+        offers_keywords = [
+            # English keywords
+            "offers", "deals", "promotions", "discounts", "special offers", "medical offers",
+            # Arabic keywords
+            "عروض", "عرض", "عروض خاصة", "خصومات", "تخفيضات", "عروض طبية", "عروض صحية"
+        ]
+        
+        # Check for doctors-only keywords in English and Arabic
+        doctors_only_keywords = [
+            # English keywords
+            "doctors only", "specialists only", "find doctor", "need doctor", "looking for doctor",
+            # Arabic keywords
+            "أطباء فقط", "دكتور فقط", "أحتاج طبيب", "أبحث عن طبيب", "مختص فقط"
+        ]
+        
+        is_offers_only = any(keyword in user_message for keyword in offers_keywords)
+        is_doctors_only = any(keyword in user_message for keyword in doctors_only_keywords)
+        
+        if is_offers_only:
+            logger.info(f"🎁 OFFERS-ONLY QUERY DETECTED: '{user_message}'")
+            logger.info(f"🎁 Skipping doctor search, proceeding with offers-only search")
+            
+            # Extract search criteria for offers search only
+            search_criteria = None
+            processed_criteria = None
+        elif is_doctors_only:
+            logger.info(f"🔍 DOCTORS-ONLY QUERY DETECTED: '{user_message}'")
+            logger.info(f"🔍 Skipping offers search, proceeding with doctors-only search")
+            
+            # Extract search criteria for doctors search only
         search_criteria = None
         processed_criteria = None
+        
+        # If this is an offers-only query, skip doctor search and only do offers search
+        if is_offers_only:
+            logger.info(f"🎁 OFFERS-ONLY MODE: Skipping doctor search")
+            
+            # Extract search criteria for offers search
+            if isinstance(search_query, str):
+                try:
+                    criteria_dict = json.loads(search_query)
+                    search_criteria = criteria_dict
+                    processed_criteria = criteria_dict
+                except json.JSONDecodeError:
+                    # If not valid JSON, treat as natural language query
+                    coordinates = {}
+                    if hasattr(thread_local, 'latitude') and hasattr(thread_local, 'longitude'):
+                        coordinates = {
+                            "latitude": thread_local.latitude,
+                            "longitude": thread_local.longitude
+                        }
+                    
+                    search_params = {
+                        "user_message": search_query,
+                        **coordinates
+                    }
+                    search_criteria = search_params
+                    processed_criteria = search_params
+            else:
+                search_criteria = search_query
+                processed_criteria = search_query
+            
+            # Execute offers search only
+            logger.info(f"🎁 OFFERS-ONLY: Executing offers search with criteria: {processed_criteria}")
+            offers_result = execute_offers_search(processed_criteria)
+            
+            # Create result with only offers data
+            offers_data = offers_result.get("data", {}).get("offers", []) if isinstance(offers_result, dict) else []
+            offers_count = len(offers_data)
+            
+            result = {
+                "response": {
+                    "message": f"I found {offers_count} offers for you." if offers_count > 0 else "No offers found matching your criteria.",
+                    "data": [],
+                    "is_offers_search": True,
+                    "offers": offers_data
+                },
+                "display_results": offers_count > 0,
+                "offers_count": offers_count
+            }
+            
+            logger.info(f"🎁 OFFERS-ONLY: Returning offers-only result with {len(result['response']['offers'])} offers")
+            return result
+        
+        # If this is a doctors-only query, skip offers search and only do doctor search
+        if is_doctors_only:
+            logger.info(f"🔍 DOCTORS-ONLY MODE: Skipping offers search")
+            
+            # Extract search criteria for doctors search
+            if isinstance(search_query, str):
+                try:
+                    criteria_dict = json.loads(search_query)
+                    search_criteria = criteria_dict
+                    processed_criteria = criteria_dict
+                except json.JSONDecodeError:
+                    # If not valid JSON, treat as natural language query
+                    coordinates = {}
+                    if hasattr(thread_local, 'latitude') and hasattr(thread_local, 'longitude'):
+                        coordinates = {
+                            "latitude": thread_local.latitude,
+                            "longitude": thread_local.longitude
+                        }
+                    
+                    search_params = {
+                        "user_message": search_query,
+                        **coordinates
+                    }
+                    search_criteria = search_params
+                    processed_criteria = search_params
+            else:
+                search_criteria = search_query
+                processed_criteria = search_query
+            
+            # Execute doctor search only
+            logger.info(f"🔍 DOCTORS-ONLY: Executing doctor search with criteria: {processed_criteria}")
+            doctor_result = unified_doctor_search(processed_criteria)
+            
+            # Create result with only doctors data
+            doctors_data = doctor_result.get("data", {}).get("doctors", []) if isinstance(doctor_result, dict) else []
+            doctors_count = len(doctors_data)
+            
+            result = {
+                "response": {
+                    "message": f"I found {doctors_count} doctors for you." if doctors_count > 0 else "No doctors found matching your criteria.",
+                    "data": doctors_data,
+                    "is_doctor_search": True,
+                    "doctors_only": True,
+                    "offers": []  # No offers data
+                },
+                "display_results": doctors_count > 0,
+                "doctor_count": doctors_count
+            }
+            
+            logger.info(f"🔍 DOCTORS-ONLY: Returning doctors-only result with {len(result['response']['data'])} doctors")
+            return result
         
         # If the search_query is a string, try to parse as JSON first
         if isinstance(search_query, str):
@@ -464,7 +547,7 @@ def dynamic_doctor_search(search_query: Union[str, dict]) -> dict:
                     logger.info(f"Using coordinates from search params: lat={criteria_dict['latitude']}, long={criteria_dict['longitude']}")
                 
                 logger.info(f"Calling unified_doctor_search with criteria: {criteria_dict}")
-                result = unified_doctor_search(criteria_dict)
+                doctor_result = unified_doctor_search(criteria_dict)
                 
                 # Extract processed criteria from the result or use original criteria
                 processed_criteria = criteria_dict
@@ -490,7 +573,7 @@ def dynamic_doctor_search(search_query: Union[str, dict]) -> dict:
                 search_criteria = search_params
                 
                 logger.info(f"Calling unified_doctor_search with text and coordinates: {search_params}")
-                result = unified_doctor_search(search_params)
+                doctor_result = unified_doctor_search(search_params)
                 
                 # For natural language queries, we need to extract the processed criteria
                 # The unified_doctor_search processes the criteria but doesn't return it
@@ -500,12 +583,12 @@ def dynamic_doctor_search(search_query: Union[str, dict]) -> dict:
             # Handle direct dictionary input
             logger.info(f"Using provided dictionary: {search_query}")
             search_criteria = search_query
-            result = unified_doctor_search(search_query)
+            doctor_result = unified_doctor_search(search_query)
             processed_criteria = search_query
         
-        # Execute offers search in parallel if we have search criteria
+        # Execute offers search in parallel if we have search criteria (skip for offers-only and doctors-only queries)
         offers_result = None
-        if processed_criteria:
+        if processed_criteria and not is_offers_only and not is_doctors_only:
             logger.info("🎁 Starting parallel offers search with processed criteria")
             logger.info(f"🎁 Processed criteria: {processed_criteria}")
             
@@ -520,21 +603,9 @@ def dynamic_doctor_search(search_query: Union[str, dict]) -> dict:
             
             def execute_offers_in_thread():
                 try:
-                    logger.info(f"🎁 [Thread] Starting execute_offers_search with criteria: {final_processed_criteria}")
                     result = execute_offers_search(final_processed_criteria)
-                    logger.info(f"🎁 [Thread] execute_offers_search returned: {type(result)}")
-                    if isinstance(result, dict):
-                        logger.info(f"🎁 [Thread] Result keys: {list(result.keys())}")
-                        for key, value in result.items():
-                            logger.info(f"🎁 [Thread] {key}: {type(value)} - {value}")
-                            if isinstance(value, list) and value:
-                                logger.info(f"🎁 [Thread] {key} has {len(value)} items")
-                                if isinstance(value[0], dict):
-                                    logger.info(f"🎁 [Thread] First item keys: {list(value[0].keys())}")
-                    
                     shared_offers_result[0] = result  # Store in shared variable
-                    logger.info(f"🎁 [Thread] Successfully stored result in shared_offers_result")
-                    logger.info(f"🎁 [Thread] shared_offers_result[0] type: {type(shared_offers_result[0])}")
+                    logger.info(f"🎁 [Thread] Offers search completed successfully")
                 except Exception as e:
                     logger.error(f"🎁 [Thread] Error in offers search: {str(e)}")
                     shared_offers_result[0] = {"data": {"doctors": [], "offers": []}}
@@ -545,132 +616,49 @@ def dynamic_doctor_search(search_query: Union[str, dict]) -> dict:
             
             # Get the offers result from shared variable
             offers_result = shared_offers_result[0]
-            logger.info(f"🎁 [dynamic_doctor_search] Retrieved offers_result from shared variable: {type(offers_result)}")
-            
-            # Debug: Print the exact offers_result content
             if offers_result is None:
                 logger.error("🎁 [dynamic_doctor_search] ERROR: offers_result is None!")
             elif isinstance(offers_result, dict):
-                logger.info(f"🎁 [dynamic_doctor_search] offers_result keys: {list(offers_result.keys())}")
-                for key, value in offers_result.items():
-                    logger.info(f"🎁 [dynamic_doctor_search] {key}: {type(value)} - {value}")
-                    if isinstance(value, list) and value:
-                        logger.info(f"🎁 [dynamic_doctor_search] {key} has {len(value)} items")
-                        if isinstance(value[0], dict):
-                            logger.info(f"🎁 [dynamic_doctor_search] First item keys: {list(value[0].keys())}")
+                logger.info(f"🎁 [dynamic_doctor_search] Retrieved offers result successfully")
             else:
                 logger.warning(f"🎁 [dynamic_doctor_search] offers_result is not a dict: {offers_result}")
             
             logger.info("🎁 [dynamic_doctor_search] Parallel offers search completed")
-            logger.info(f"🎁 [dynamic_doctor_search] RECEIVED offers_result: {type(offers_result)}")
-            if isinstance(offers_result, dict):
-                logger.info(f"🎁 [dynamic_doctor_search] offers_result keys: {list(offers_result.keys())}")
-                if 'offers' in offers_result:
-                    logger.info(f"🎁 [dynamic_doctor_search] offers_result['offers']: {len(offers_result['offers'])} items")
-                if 'data' in offers_result:
-                    logger.info(f"🎁 [dynamic_doctor_search] offers_result['data']: {type(offers_result['data'])}")
-            else:
-                logger.info(f"🎁 [dynamic_doctor_search] offers_result value: {offers_result}")
+        
+        # Now combine doctor_result with offers_result
+        if 'doctor_result' in locals() and doctor_result:
+            # Use the doctor_result as the base result
+            result = doctor_result
+            logger.info(f"🎁 [dynamic_doctor_search] Using doctor_result as base result")
             
-            # Add offers results to the result BEFORE formatting
-            if offers_result:
-                logger.info("🎁 [dynamic_doctor_search] Adding offers results to result before formatting")
-                logger.info(f"🎁 [dynamic_doctor_search] offers_result type: {type(offers_result)}")
-                logger.info(f"🎁 [dynamic_doctor_search] offers_result keys: {list(offers_result.keys()) if isinstance(offers_result, dict) else 'Not a dict'}")
-                
-                # Extract offers data from the offers_result
-                offers_data = []
-                logger.info(f"🎁 [dynamic_doctor_search] Starting offers extraction from offers_result")
-                logger.info(f"🎁 [dynamic_doctor_search] offers_result type: {type(offers_result)}")
-                logger.info(f"🎁 [dynamic_doctor_search] offers_result keys: {list(offers_result.keys()) if isinstance(offers_result, dict) else 'Not a dict'}")
-                
-                # Extract offers from the new unified structure
-                if isinstance(offers_result, dict) and 'offers' in offers_result:
-                    offers_data = offers_result['offers']
-                    logger.info(f"🎁 [dynamic_doctor_search] Found {len(offers_data)} offers directly in offers_result['offers']")
-                    logger.info(f"🎁 [dynamic_doctor_search] First offer sample: {offers_data[0] if offers_data else 'No offers'}")
-                elif isinstance(offers_result, dict) and 'data' in offers_result:
-                    offers_data_dict = offers_result.get('data', {})
-                    logger.info(f"🎁 [dynamic_doctor_search] offers_data_dict type: {type(offers_data_dict)}")
-                    logger.info(f"🎁 [dynamic_doctor_search] offers_data_dict keys: {list(offers_data_dict.keys()) if isinstance(offers_data_dict, dict) else 'Not a dict'}")
-                    
-                    if isinstance(offers_data_dict, dict) and 'offers' in offers_data_dict:
-                        # Extract offers from data.offers
-                        offers_data = offers_data_dict['offers']
-                        logger.info(f"🎁 [dynamic_doctor_search] Found {len(offers_data)} offers in data.offers")
-                        logger.info(f"🎁 [dynamic_doctor_search] First offer: {offers_data[0].get('OfferName_en', 'Unknown') if offers_data else 'No offers'} (ID: {offers_data[0].get('OfferId', 'Unknown') if offers_data else 'Unknown'})")
-                    elif isinstance(offers_data_dict, dict) and 'doctors' in offers_data_dict:
-                        # Check if the doctors list contains offer data (has OfferId, OfferName, etc.)
-                        doctors_list = offers_data_dict['doctors']
-                        if doctors_list and isinstance(doctors_list, list) and len(doctors_list) > 0:
-                            first_item = doctors_list[0]
-                            if isinstance(first_item, dict) and 'OfferId' in first_item:
-                                # This is offers data, not doctors data - extract it as offers
-                                offers_data = doctors_list
-                                logger.info(f"🎁 [dynamic_doctor_search] Found {len(offers_data)} offers in data.doctors (these are actually offers)")
-                                logger.info(f"🎁 [dynamic_doctor_search] First offer: {first_item.get('OfferName_en', 'Unknown')} (ID: {first_item.get('OfferId', 'Unknown')})")
-                            else:
-                                logger.info(f"🎁 [dynamic_doctor_search] Found {len(doctors_list)} doctors in data.doctors (not offers)")
-                        else:
-                            logger.info(f"🎁 [dynamic_doctor_search] No doctors found in data.doctors")
-                    else:
-                        logger.warning("🎁 [dynamic_doctor_search] Offers data structure not as expected")
-                        logger.warning(f"🎁 [dynamic_doctor_search] offers_data_dict: {offers_data_dict}")
-                        # Try alternative extraction methods
-                        if isinstance(offers_data_dict, list):
-                            offers_data = offers_data_dict
-                            logger.info(f"🎁 [dynamic_doctor_search] Using offers_data_dict directly as list: {len(offers_data)} offers")
-                        elif isinstance(offers_data_dict, dict):
-                            # Look for any list in the data that might be offers
-                            for key, value in offers_data_dict.items():
-                                if isinstance(value, list):
-                                    offers_data = value
-                                    logger.info(f"🎁 [dynamic_doctor_search] Found offers in key '{key}': {len(offers_data)} offers")
-                                    break
-                else:
-                    logger.warning("🎁 [dynamic_doctor_search] Offers result is not a dict or doesn't contain 'data'")
-                    logger.warning(f"🎁 [dynamic_doctor_search] offers_result: {offers_result}")
-                    # Try to extract offers directly from offers_result
-                    if isinstance(offers_result, dict):
-                        for key, value in offers_result.items():
-                            if isinstance(value, list):
-                                offers_data = value
-                                logger.info(f"🎁 [dynamic_doctor_search] Found offers directly in offers_result key '{key}': {len(offers_data)} offers")
-                                break
-                
-                # Add offers to the result
-                if isinstance(result, dict):
+            # Add offers to the result if we have them
+            if offers_result and isinstance(offers_result, dict):
+                offers_data = offers_result.get("data", {}).get("offers", []) if isinstance(offers_result, dict) else []
+                if offers_data:
                     result['offers'] = offers_data
-                    logger.info(f"🎁 [dynamic_doctor_search] Added {len(offers_data)} offers to result before formatting")
-                    logger.info(f"🎁 [dynamic_doctor_search] Result keys after adding offers: {list(result.keys())}")
-                    logger.info(f"🎁 [dynamic_doctor_search] Result offers type: {type(result['offers'])}")
-                    logger.info(f"🎁 [dynamic_doctor_search] Result offers length: {len(result['offers']) if isinstance(result['offers'], list) else 'Not a list'}")
-                    
-                    # Ensure offers are at the top level, not inside any nested structure
-                    if 'offers' in result:
-                        logger.info(f"🎁 [dynamic_doctor_search] Offers confirmed at top level of result")
-                    else:
-                        logger.error("🎁 [dynamic_doctor_search] Offers not found at top level after adding")
+                    logger.info(f"🎁 [dynamic_doctor_search] Added {len(offers_data)} offers to result")
                 else:
-                    logger.error("🎁 [dynamic_doctor_search] Result is not a dict, cannot add offers")
-                    logger.error(f"🎁 [dynamic_doctor_search] Result type: {type(result)}")
+                    logger.info(f"🎁 [dynamic_doctor_search] No offers data to add")
             else:
-                logger.warning("🎁 [dynamic_doctor_search] No offers_result to add")
+                logger.info(f"🎁 [dynamic_doctor_search] No offers_result to add")
+        elif is_offers_only:
+            logger.info("🎁 OFFERS-ONLY MODE: Skipping parallel offers search (already done)")
         
         # Ensure proper formatting of result (now with offers included)
         result = ensure_proper_doctor_search_format(result, str(search_query))
         
-        # Debug: Check if offers are properly placed in the response object after formatting
-        if isinstance(result, dict) and 'response' in result:
-            if 'offers' in result['response']:
-                logger.info(f"🎁 [dynamic_doctor_search] FINAL: Offers properly placed in response object: {len(result['response']['offers'])} offers")
-            else:
-                logger.info(f"🎁 [dynamic_doctor_search] FINAL: No offers found in response object after formatting")
-            logger.info(f"🎁 [dynamic_doctor_search] FINAL: Final result keys: {list(result.keys())}")
+        # Check if offers are properly placed in the response object after formatting
+        if isinstance(result, dict) and 'response' in result and 'offers' in result['response']:
+            logger.info(f"🎁 [dynamic_doctor_search] FINAL: {len(result['response']['offers'])} offers in response")
         else:
-            logger.info(f"🎁 [dynamic_doctor_search] FINAL: Result is not a dict or missing response after formatting")
+            logger.info(f"🎁 [dynamic_doctor_search] FINAL: No offers in response")
         
-        logger.info(f"🎁 [dynamic_doctor_search] RETURNING: Final result with {len(result.get('response', {}).get('offers', []))} offers")
+        if is_offers_only:
+            logger.info(f"🎁 [dynamic_doctor_search] RETURNING: Offers-only result")
+        elif is_doctors_only:
+            logger.info(f"🔍 [dynamic_doctor_search] RETURNING: Doctors-only result")
+        else:
+            logger.info(f"🎁 [dynamic_doctor_search] RETURNING: Final result (both doctors and offers)")
         
         # Ensure the function has a name attribute that matches its actual name
         dynamic_doctor_search.__name__ = "dynamic_doctor_search"
@@ -695,12 +683,10 @@ def ensure_proper_doctor_search_format(result: Dict[str, Any], query: str) -> Di
     Returns:
         A properly formatted response dictionary
     """
-    logger.info(f"🎁 [ensure_proper_doctor_search_format] RECEIVED: result type: {type(result)}")
-    logger.info(f"🎁 [ensure_proper_doctor_search_format] RECEIVED: result keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
     if isinstance(result, dict) and 'offers' in result:
-        logger.info(f"🎁 [ensure_proper_doctor_search_format] RECEIVED: {len(result['offers'])} offers in result")
+        logger.info(f"🎁 [ensure_proper_doctor_search_format] RECEIVED: {len(result['offers'])} offers")
     else:
-        logger.info(f"🎁 [ensure_proper_doctor_search_format] RECEIVED: No offers in result")
+        logger.info(f"🎁 [ensure_proper_doctor_search_format] RECEIVED: No offers")
     
     # Check for nested response objects and unwrap them
     if isinstance(result, dict) and "response" in result and isinstance(result["response"], dict):
@@ -742,9 +728,9 @@ def ensure_proper_doctor_search_format(result: Dict[str, Any], query: str) -> Di
             offers_data = []
             if isinstance(result, dict) and 'offers' in result:
                 offers_data = result['offers']
-                logger.info(f"🎁 [ensure_proper_doctor_search_format] Early return: Preserved {len(offers_data)} offers from original result")
+                logger.info(f"🎁 [ensure_proper_doctor_search_format] Early return: Preserved {len(offers_data)} offers")
             else:
-                logger.info(f"🎁 [ensure_proper_doctor_search_format] Early return: No offers found in result to preserve")
+                logger.info(f"🎁 [ensure_proper_doctor_search_format] Early return: No offers to preserve")
             
             # Return properly formatted result with offers
             formatted_result = {
@@ -762,14 +748,10 @@ def ensure_proper_doctor_search_format(result: Dict[str, Any], query: str) -> Di
             # Add offers to the response object
             if offers_data:
                 formatted_result['response']['offers'] = offers_data
-                logger.info(f"🎁 [ensure_proper_doctor_search_format] Early return: Added {len(offers_data)} offers inside response object")
+                logger.info(f"🎁 [ensure_proper_doctor_search_format] Early return: Added {len(offers_data)} offers")
             else:
                 formatted_result['response']['offers'] = []
-                logger.info(f"🎁 [ensure_proper_doctor_search_format] Early return: Initialized empty offers array inside response object")
-            
-            logger.info(f"🎁 [ensure_proper_doctor_search_format] Early return: Final result keys: {list(formatted_result.keys())}")
-            if 'response' in formatted_result and 'offers' in formatted_result['response']:
-                logger.info(f"🎁 [ensure_proper_doctor_search_format] Early return: Final offers count: {len(formatted_result['response']['offers'])}")
+                logger.info(f"🎁 [ensure_proper_doctor_search_format] Early return: No offers added")
             
             return formatted_result
     
@@ -813,38 +795,21 @@ def ensure_proper_doctor_search_format(result: Dict[str, Any], query: str) -> Di
         "doctor_count": len(doctors)
     }
     
-    logger.info(f"🎁 [ensure_proper_doctor_search_format] Created base standardized_result with {len(doctors)} doctors")
-    logger.info(f"🎁 [ensure_proper_doctor_search_format] Base standardized_result keys: {list(standardized_result.keys())}")
-    logger.info(f"🎁 [ensure_proper_doctor_search_format] Base response keys: {list(standardized_result['response'].keys())}")
-    
     # Preserve offers data if it exists in the original result
     offers_data = []
     if isinstance(result, dict) and 'offers' in result:
         offers_data = result['offers']
-        logger.info(f"🎁 [ensure_proper_doctor_search_format] Preserved {len(offers_data)} offers from original result")
+        logger.info(f"🎁 [ensure_proper_doctor_search_format] Preserved {len(offers_data)} offers")
     else:
-        logger.info(f"🎁 [ensure_proper_doctor_search_format] No offers found in result to preserve")
-        logger.info(f"🎁 [ensure_proper_doctor_search_format] Result keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
+        logger.info(f"🎁 [ensure_proper_doctor_search_format] No offers to preserve")
     
     # Add offers to the response object at the same level as patient, message, and data
     if offers_data:
         standardized_result['response']['offers'] = offers_data
-        logger.info(f"🎁 [ensure_proper_doctor_search_format] Added {len(offers_data)} offers inside response object")
-        logger.info(f"🎁 [ensure_proper_doctor_search_format] Offers sample: {offers_data[0] if offers_data else 'No offers'}")
+        logger.info(f"🎁 [ensure_proper_doctor_search_format] Added {len(offers_data)} offers")
     else:
         standardized_result['response']['offers'] = []
-        logger.info(f"🎁 [ensure_proper_doctor_search_format] Initialized empty offers array inside response object")
-    
-    # Debug: Verify offers are in the final structure
-    logger.info(f"🎁 [ensure_proper_doctor_search_format] Final standardized_result keys: {list(standardized_result.keys())}")
-    if 'response' in standardized_result:
-        logger.info(f"🎁 [ensure_proper_doctor_search_format] Response keys: {list(standardized_result['response'].keys())}")
-        if 'offers' in standardized_result['response']:
-            logger.info(f"🎁 [ensure_proper_doctor_search_format] Response offers count: {len(standardized_result['response']['offers'])}")
-        else:
-            logger.info(f"🎁 [ensure_proper_doctor_search_format] No offers key in response")
-    else:
-        logger.info(f"🎁 [ensure_proper_doctor_search_format] No response key in standardized_result")
+        logger.info(f"🎁 [ensure_proper_doctor_search_format] No offers added")
     
     # Ensure the structure matches the expected format with both data and offers
     if 'data' not in standardized_result:
@@ -852,12 +817,7 @@ def ensure_proper_doctor_search_format(result: Dict[str, Any], query: str) -> Di
     elif isinstance(standardized_result['data'], dict) and 'doctors' not in standardized_result['data']:
         standardized_result['data']['doctors'] = doctors
     
-    logger.info(f"🎁 [ensure_proper_doctor_search_format] Created standardized result with {len(doctors)} doctors")
-    logger.info(f"🎁 [ensure_proper_doctor_search_format] Final standardized result keys: {list(standardized_result.keys())}")
-    if 'response' in standardized_result and 'offers' in standardized_result['response']:
-        logger.info(f"🎁 [ensure_proper_doctor_search_format] RETURNING: {len(standardized_result['response']['offers'])} offers in response object")
-    else:
-        logger.info(f"🎁 [ensure_proper_doctor_search_format] RETURNING: No offers in response object")
+    logger.info(f"🎁 [ensure_proper_doctor_search_format] RETURNING: {len(doctors)} doctors, {len(standardized_result['response'].get('offers', []))} offers")
     return standardized_result
 
 @tool(return_direct=False)

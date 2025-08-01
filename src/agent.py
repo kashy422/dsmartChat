@@ -55,7 +55,8 @@ from .agent_tools import (
     store_patient_details,
     dynamic_doctor_search,
     analyze_symptoms,
-    analyze_symptoms_tool
+    analyze_symptoms_tool,
+    execute_offers_search
 )
 from .common import write
 from .consts import SYSTEM_AGENT_ENHANCED,UNIFIED_MEDICAL_ASSISTANT_PROMPT
@@ -536,15 +537,12 @@ def validate_doctor_result(result, patient_data=None, json_requested=True):
     if isinstance(result, dict):
         if 'offers' in result:
             offers_data = result['offers']
-            logger.info(f"VALIDATION: Found {len(offers_data)} offers at top level of original result")
+            logger.info(f"VALIDATION: Found {len(offers_data)} offers at top level")
         elif 'response' in result and isinstance(result['response'], dict) and 'offers' in result['response']:
             offers_data = result['response']['offers']
-            logger.info(f"VALIDATION: Found {len(offers_data)} offers inside response.offers of original result")
+            logger.info(f"VALIDATION: Found {len(offers_data)} offers inside response.offers")
         else:
             logger.info(f"VALIDATION: No offers found in original result")
-            logger.info(f"VALIDATION: Result keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
-            if isinstance(result, dict) and 'response' in result and isinstance(result['response'], dict):
-                logger.info(f"VALIDATION: Response keys: {list(result['response'].keys())}")
     
     # Check for nested response objects and unwrap them
     if isinstance(result, dict) and "response" in result and isinstance(result["response"], dict):
@@ -611,23 +609,11 @@ def validate_doctor_result(result, patient_data=None, json_requested=True):
     # Preserve offers data if it exists in the original result
     if offers_data:
         response['response']['offers'] = offers_data
-        logger.info(f"VALIDATION: Preserved {len(offers_data)} offers in validated result")
-        logger.info(f"VALIDATION: Offers sample: {offers_data[0] if offers_data else 'No offers'}")
+        logger.info(f"VALIDATION: Preserved {len(offers_data)} offers")
     else:
         # Initialize empty offers array if no offers found
         response['response']['offers'] = []
-        logger.info(f"VALIDATION: No offers to preserve in validated result, initializing empty array")
-    
-    # Debug: Verify offers are in the final structure
-    logger.info(f"VALIDATION: Final response keys: {list(response.keys())}")
-    if 'response' in response:
-        logger.info(f"VALIDATION: Response keys: {list(response['response'].keys())}")
-        if 'offers' in response['response']:
-            logger.info(f"VALIDATION: Response offers count: {len(response['response']['offers'])}")
-        else:
-            logger.info(f"VALIDATION: No offers key in response")
-    else:
-        logger.info(f"VALIDATION: No response key in response")
+        logger.info(f"VALIDATION: No offers to preserve")
     
     logger.info(f"VALIDATION: Creating response with {doctor_count} doctors")
     logger.info(f"VALIDATION: Final response keys: {list(response.keys())}")
@@ -711,6 +697,14 @@ def simplify_doctor_message(response_object, logger):
     # Ensure patient data is preserved
     if "patient" in response_dict:
         response_object["response"]["patient"] = response_dict["patient"]
+    
+    # Ensure offers data is preserved
+    if "offers" in response_dict:
+        response_object["response"]["offers"] = response_dict["offers"]
+        logger.info(f"🔄 Preserved {len(response_dict['offers'])} offers in simplify_doctor_message")
+    else:
+        response_object["response"]["offers"] = []
+        logger.info(f"🔄 No offers to preserve in simplify_doctor_message")
     
     # Ensure doctor_data is included in response for display
     response_object["display_results"] = True
@@ -1047,11 +1041,21 @@ def chat_engine():
                             {"role": "system", "content": """
                             You analyze user messages in a medical assistant chat to determine the intent.
                             Classify the message into ONE of these categories:
-                            1. DOCTOR_SEARCH - User explicitly wants to find a doctor/specialist
-                            2. SYMPTOM_DESCRIPTION - User is describing symptoms or health issues
-                            3. INFORMATION_REQUEST - User is asking for medical information without describing personal symptoms
-                            4. GREETING - Simple greeting or conversation starter with no medical content
-                            5. OTHER - Any other type of message
+                            1. DOCTORS_ONLY - User explicitly asks for doctors/specialists only (no offers mentioned)
+                            2. OFFERS_ONLY - User specifically asks for offers, deals, promotions, or discounts only (no doctors mentioned)
+                            3. DOCTOR_SEARCH - User wants to find doctors (may also want offers, general search)
+                            4. SYMPTOM_DESCRIPTION - User is describing symptoms or health issues
+                            5. INFORMATION_REQUEST - User is asking for medical information without describing personal symptoms
+                            6. GREETING - Simple greeting or conversation starter with no medical content
+                            7. OTHER - Any other type of message
+                            
+                            For OFFERS_ONLY, look for keywords like:
+                            - English: "offers", "deals", "promotions", "discounts", "special offers", "medical offers"
+                            - Arabic: "عروض", "عرض", "عروض خاصة", "خصومات", "تخفيضات", "عروض طبية", "عروض صحية"
+                            
+                            For DOCTORS_ONLY, look for keywords like:
+                            - English: "doctors only", "specialists only", "find doctor", "need doctor", "looking for doctor"
+                            - Arabic: "أطباء فقط", "دكتور فقط", "أحتاج طبيب", "أبحث عن طبيب", "مختص فقط"
                             
                             Reply with ONLY the category name and nothing else.
                             """},
@@ -1063,8 +1067,99 @@ def chat_engine():
                     logger.info(f"Detected message intent: {message_intent}")
                     
                     # Handle different intents
-                    if message_intent == "DOCTOR_SEARCH":
-                        logger.info(f"🔍 Doctor search intent detected")
+                    if message_intent == "DOCTORS_ONLY":
+                        logger.info(f"🔍 Doctors-only search intent detected")
+                        
+                        # Get history for processing but don't add the message yet
+                        history = get_session_history(session_id)
+                        
+                        # Extract search criteria for doctors-only search
+                        logger.info(f"Extracting search criteria from message: '{user_message}'")
+                        search_criteria = extract_search_criteria_from_message(user_message)
+                        
+                        logger.info(f"Extracted search criteria: {search_criteria}")
+                        
+                        # Update search params with extracted criteria
+                        search_params = search_criteria.copy()
+
+                        # Add coordinates 
+                        if lat is not None and long is not None:
+                            search_params["latitude"] = lat
+                            search_params["longitude"] = long
+                            logger.info(f"Added coordinates to search parameters: lat={lat}, long={long}")
+                        
+                        # Convert to JSON for the search function
+                        search_json = json.dumps(search_params)
+                        logger.info(f"Executing doctors-only search with: {search_json}")
+                        
+                        # Call the search function with doctors-only flag
+                        search_result = dynamic_doctor_search(search_json)
+                        validated_result = validate_doctor_result(search_result, history.get_patient_data())
+                        
+                        # Mark as doctors-only search
+                        if isinstance(validated_result, dict) and isinstance(validated_result.get("response"), dict):
+                            validated_result["response"]["is_doctor_search"] = True
+                            validated_result["response"]["doctors_only"] = True
+                        
+                        # Record the search in tool execution history
+                        history.add_tool_execution("search_doctors_only", validated_result)
+                        
+                    elif message_intent == "OFFERS_ONLY":
+                        logger.info(f"🎁 Offers-only search intent detected")
+                        
+                        # Get history for processing but don't add the message yet
+                        history = get_session_history(session_id)
+                        
+                        # Extract search criteria for offers-only search
+                        logger.info(f"Extracting search criteria from message: '{user_message}'")
+                        search_criteria = extract_search_criteria_from_message(user_message)
+                        
+                        logger.info(f"Extracted search criteria: {search_criteria}")
+                        
+                        # Update search params with extracted criteria
+                        search_params = search_criteria.copy()
+
+                        # Add coordinates 
+                        if lat is not None and long is not None:
+                            search_params["latitude"] = lat
+                            search_params["longitude"] = long
+                            logger.info(f"Added coordinates to search parameters: lat={lat}, long={long}")
+                        
+                        # Call the offers search function directly with the dictionary
+                        logger.info(f"Executing offers-only search with: {search_params}")
+                        offers_result = execute_offers_search(search_params)
+                        logger.info(f"Offers-only search completed")
+                        
+                        # Create a response object with only offers data
+                        offers_data = offers_result.get("data", {}).get("offers", []) if isinstance(offers_result, dict) else []
+                        offers_count = len(offers_data)
+                        
+                        response_object = {
+                            "response": {
+                                "message": f"I found {offers_count} offers for you." if offers_count > 0 else "No offers found matching your criteria.",
+                                "patient": history.get_patient_data() or {"session_id": session_id},
+                                "data": [],  # No doctors data
+                                "is_offers_search": True,
+                                "offers_only": True,
+                                "offers": offers_data
+                            },
+                            "display_results": offers_count > 0,
+                            "offers_count": offers_count
+                        }
+                        
+                        # Record the search in tool execution history
+                        history.add_tool_execution("search_offers_only", response_object)
+                        
+                        # Add the user message to history
+                        self.add_message_to_history(session_id, {"role": "user", "content": user_message})
+                        
+                        # Add a simple response message
+                        history.add_ai_message("I found some offers for you.")
+                        
+                        return response_object
+                        
+                    elif message_intent == "DOCTOR_SEARCH":
+                        logger.info(f"🔍 Doctor search intent detected (will show both doctors and offers)")
                         
                         # Get history for processing but don't add the message yet
                         history = get_session_history(session_id)
@@ -1138,9 +1233,6 @@ def chat_engine():
                             search_params["latitude"] = lat
                             search_params["longitude"] = long
                             logger.info(f"Added coordinates to search parameters: lat={lat}, long={long}")
-                        
-                        # Debug log to check final search parameters
-                        logger.info(f"FINAL SEARCH PARAMS: {search_params}")
                         
                         # Convert to JSON for the search function
                         search_json = json.dumps(search_params)
@@ -1706,23 +1798,20 @@ When responding:
                                 
                                 # Execute search
                                 try:
-                                    logger.info(f"🎁 [OpenAIChatEngine.invoke] CALLING: dynamic_doctor_search with query: {search_query[:100]}...")
+                                    logger.info(f"🎁 [OpenAIChatEngine.invoke] CALLING: dynamic_doctor_search")
                                     search_result = dynamic_doctor_search(search_query)
-                                    logger.info(f"🎁 [OpenAIChatEngine.invoke] RECEIVED: search_result type: {type(search_result)}")
-                                    logger.info(f"🎁 [OpenAIChatEngine.invoke] RECEIVED: search_result keys: {list(search_result.keys()) if isinstance(search_result, dict) else 'Not a dict'}")
-                                    if isinstance(search_result, dict) and 'response' in search_result and 'offers' in search_result['response']:
-                                        logger.info(f"🎁 [OpenAIChatEngine.invoke] RECEIVED: {len(search_result['response']['offers'])} offers in search_result")
-                                    else:
-                                        logger.info(f"🎁 [OpenAIChatEngine.invoke] RECEIVED: No offers in search_result")
+                                    logger.info(f"🎁 [OpenAIChatEngine.invoke] RECEIVED: search_result")
                                     
                                     logger.info(f"🎁 [OpenAIChatEngine.invoke] CALLING: validate_doctor_result")
                                     validated_result = validate_doctor_result(search_result, patient_data)
-                                    logger.info(f"🎁 [OpenAIChatEngine.invoke] RECEIVED: validated_result type: {type(validated_result)}")
-                                    logger.info(f"🎁 [OpenAIChatEngine.invoke] RECEIVED: validated_result keys: {list(validated_result.keys()) if isinstance(validated_result, dict) else 'Not a dict'}")
-                                    if isinstance(validated_result, dict) and 'response' in validated_result and 'offers' in validated_result['response']:
-                                        logger.info(f"🎁 [OpenAIChatEngine.invoke] RECEIVED: {len(validated_result['response']['offers'])} offers in validated_result")
+                                    logger.info(f"🎁 [OpenAIChatEngine.invoke] RECEIVED: validated_result")
+                                    
+                                    # Debug: Check if offers are preserved in validated_result
+                                    if isinstance(validated_result, dict) and 'response' in validated_result:
+                                        offers_count = len(validated_result['response'].get('offers', []))
+                                        logger.info(f"🎁 [OpenAIChatEngine.invoke] DEBUG: validated_result has {offers_count} offers")
                                     else:
-                                        logger.info(f"🎁 [OpenAIChatEngine.invoke] RECEIVED: No offers in validated_result")
+                                        logger.info(f"🎁 [OpenAIChatEngine.invoke] DEBUG: validated_result has no offers or invalid structure")
                                     
                                     # Mark this as a doctor search response
                                     if isinstance(validated_result, dict) and isinstance(validated_result.get("response"), dict):
@@ -2168,31 +2257,31 @@ Example format (adjust to match user's language and style):
                         }
                         
                         # Preserve offers data if it exists in the doctor search result (both top level and inside response)
-                        logger.info(f"🎁 [OpenAIChatEngine.invoke] FINAL: doctor_search_result type: {type(doctor_search_result)}")
-                        logger.info(f"🎁 [OpenAIChatEngine.invoke] FINAL: doctor_search_result keys: {list(doctor_search_result.keys()) if isinstance(doctor_search_result, dict) else 'Not a dict'}")
-                        
                         offers_data = []
                         if doctor_search_result and isinstance(doctor_search_result, dict):
+                            logger.info(f"🎁 [OpenAIChatEngine.invoke] FINAL: doctor_search_result keys: {list(doctor_search_result.keys())}")
                             if 'offers' in doctor_search_result:
                                 offers_data = doctor_search_result['offers']
-                                logger.info(f"🎁 [OpenAIChatEngine.invoke] FINAL: Found {len(offers_data)} offers at top level of doctor_search_result")
-                            elif 'response' in doctor_search_result and isinstance(doctor_search_result['response'], dict) and 'offers' in doctor_search_result['response']:
-                                offers_data = doctor_search_result['response']['offers']
-                                logger.info(f"🎁 [OpenAIChatEngine.invoke] FINAL: Found {len(offers_data)} offers inside response.offers of doctor_search_result")
+                                logger.info(f"🎁 [OpenAIChatEngine.invoke] FINAL: Found {len(offers_data)} offers at top level")
+                            elif 'response' in doctor_search_result and isinstance(doctor_search_result['response'], dict):
+                                logger.info(f"🎁 [OpenAIChatEngine.invoke] FINAL: response keys: {list(doctor_search_result['response'].keys())}")
+                                if 'offers' in doctor_search_result['response']:
+                                    offers_data = doctor_search_result['response']['offers']
+                                    logger.info(f"🎁 [OpenAIChatEngine.invoke] FINAL: Found {len(offers_data)} offers inside response.offers")
+                                else:
+                                    logger.info(f"🎁 [OpenAIChatEngine.invoke] FINAL: No offers in response object")
                             else:
-                                logger.info(f"🎁 [OpenAIChatEngine.invoke] FINAL: No offers found in doctor_search_result")
-                                if 'response' in doctor_search_result and isinstance(doctor_search_result['response'], dict):
-                                    logger.info(f"🎁 [OpenAIChatEngine.invoke] FINAL: Response keys: {list(doctor_search_result['response'].keys())}")
+                                logger.info(f"🎁 [OpenAIChatEngine.invoke] FINAL: No offers found")
+                        else:
+                            logger.info(f"🎁 [OpenAIChatEngine.invoke] FINAL: doctor_search_result is None or not a dict")
                         
                         if offers_data:
                             response_object['offers'] = offers_data
-                            logger.info(f"🎁 [OpenAIChatEngine.invoke] FINAL: Preserved {len(offers_data)} offers in final response")
-                            logger.info(f"🎁 [OpenAIChatEngine.invoke] FINAL: Offers data type: {type(offers_data)}")
-                            logger.info(f"🎁 [OpenAIChatEngine.invoke] FINAL: Offers data length: {len(offers_data) if isinstance(offers_data, list) else 'Not a list'}")
+                            logger.info(f"🎁 [OpenAIChatEngine.invoke] FINAL: Preserved {len(offers_data)} offers")
                         else:
                             # Initialize empty offers array if no offers found
                             response_object['offers'] = []
-                            logger.info(f"🎁 [OpenAIChatEngine.invoke] FINAL: No offers found, initializing empty offers array")
+                            logger.info(f"🎁 [OpenAIChatEngine.invoke] FINAL: No offers found, initializing empty array")
                         
                         # Move offers inside the response object at the same level as patient, message, and data
                         if 'offers' in response_object:
@@ -2201,11 +2290,10 @@ Example format (adjust to match user's language and style):
                                 response_object['response']['offers'] = response_object['offers']
                                 del response_object['offers']
                                 logger.info(f"🎁 [OpenAIChatEngine.invoke] FINAL: Moved offers inside response object")
-                                logger.info(f"🎁 [OpenAIChatEngine.invoke] FINAL: Final response has {len(response_object['response']['offers'])} offers")
                             else:
                                 logger.error("🎁 [OpenAIChatEngine.invoke] FINAL: No response object found to move offers into")
                         else:
-                            logger.info(f"🎁 [OpenAIChatEngine.invoke] FINAL: No offers to move, initializing empty offers array")
+                            logger.info(f"🎁 [OpenAIChatEngine.invoke] FINAL: No offers to move")
                             response_object['response']['offers'] = []
                         
                         # Add doctor-specific fields based on results
@@ -2275,20 +2363,20 @@ Example format (adjust to match user's language and style):
                         if doctor_search_result and isinstance(doctor_search_result, dict):
                             if 'offers' in doctor_search_result:
                                 offers_data = doctor_search_result['offers']
-                                logger.info(f"🎁 Found {len(offers_data)} offers at top level of doctor_search_result from history")
+                                logger.info(f"🎁 Found {len(offers_data)} offers at top level from history")
                             elif 'response' in doctor_search_result and isinstance(doctor_search_result['response'], dict) and 'offers' in doctor_search_result['response']:
                                 offers_data = doctor_search_result['response']['offers']
-                                logger.info(f"🎁 Found {len(offers_data)} offers inside response.offers of doctor_search_result from history")
+                                logger.info(f"🎁 Found {len(offers_data)} offers inside response.offers from history")
                             else:
-                                logger.info(f"🎁 No offers found in doctor_search_result from history")
+                                logger.info(f"🎁 No offers found in history")
                         
                         if offers_data:
                             response_object['offers'] = offers_data
-                            logger.info(f"🎁 Preserved {len(offers_data)} offers in final response from history")
+                            logger.info(f"🎁 Preserved {len(offers_data)} offers from history")
                         else:
                             # Initialize empty offers array if no offers found
                             response_object['offers'] = []
-                            logger.info(f"🎁 No offers found in history, initializing empty offers array")
+                            logger.info(f"🎁 No offers found in history")
                         
                         # Ensure offers are at the same level as response, not inside it
                         if 'offers' in response_object:
@@ -2296,9 +2384,9 @@ Example format (adjust to match user's language and style):
                             if 'response' in response_object:
                                 response_object['response']['offers'] = response_object['offers']
                                 del response_object['offers']
-                                logger.info(f"🎁 Moved offers inside response object (history)")
+                                logger.info(f"🎁 Moved offers inside response object")
                             else:
-                                logger.error("🎁 DEBUG: No response object found to move offers into")
+                                logger.error("🎁 No response object found to move offers into")
                         
                         if has_doctor_results:
                             # Add doctor-specific fields

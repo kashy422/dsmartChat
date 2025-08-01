@@ -694,6 +694,10 @@ def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
              * "show offers at King Fahd Hospital" -> branch_name: "King Fahd Hospital"
              * "offers from dental clinic" -> branch_name: "dental clinic"
              * "عروض من عيادة الأسنان" -> branch_name: "عيادة الأسنان"
+             * "عروض في مستشفى الملك فهد" -> branch_name: "مستشفى الملك فهد"
+             * "عروض من عيادة التجميل" -> branch_name: "عيادة التجميل"
+             * "عروض خاصة من عيادة الأسنان" -> branch_name: "عيادة الأسنان"
+             * "خصومات في عيادة التجميل" -> branch_name: "عيادة التجميل"
         
         3. All other fields must be in English:
            - Specialty: "طبيب أسنان" -> "dentist"
