@@ -1,0 +1,50 @@
+name: Deploy Python Chat App to Staging
+
+on:
+  push:
+    branches:
+      - staging # Triggers the workflow on push to the 'staging' branch
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Configure SSH private key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_KEY_STAGING }}" | tr -d '\r' > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan 40.172.224.136 >> ~/.ssh/known_hosts
+
+      - name: Create .env file with secrets
+        env:
+          API_KEY: ${{ secrets.API_KEY }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_DATABASE: ${{ secrets.DB_DATABASE }}
+          DB_DRIVER: ${{ secrets.DB_DRIVER }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          echo "API_KEY=$API_KEY" >> .env
+          echo "DB_HOST=$DB_HOST" >> .env
+          echo "DB_USER=$DB_USER" >> .env
+          echo "DB_PASSWORD=$DB_PASSWORD" >> .env
+          echo "DB_DATABASE=$DB_DATABASE" >> .env
+          echo "DB_DRIVER=$DB_DRIVER" >> .env
+          echo "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID" >> .env
+          echo "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY" >> .env
+          echo "AWS_REGION=$AWS_REGION" >> .env
+
+      - name: Deploy to staging via rsync
+        run: |
+          rsync -avz --delete -e "ssh -i ~/.ssh/id_ed25519" ./* ubuntu@40.172.224.136:/var/www/dsmart.ai/chatApi/
+
+      - name: Install dependencies and restart service
+        run: |
+          ssh -i ~/.ssh/id_ed25519 ubuntu@40.172.224.136 "sudo /bin/bash -c 'cd /var/www/dsmart.ai/chatApi/ && source venv/bin/activate && pip install -r requirements.txt && sudo systemctl restart chat.staging1.dsmart.ai.service'"
