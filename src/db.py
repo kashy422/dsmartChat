@@ -52,7 +52,7 @@ class DB:
         try:
             # Build connection string from individual parameters
             params = urllib.parse.quote_plus(
-                f"DRIVER={{ODBC Driver 17 for SQL Server}};"
+                f"DRIVER={os.getenv('DB_DRIVER')};"
                 f"SERVER={os.getenv('DB_HOST')};"
                 f"DATABASE={os.getenv('DB_DATABASE')};"
                 f"UID={os.getenv('DB_USER')};"
