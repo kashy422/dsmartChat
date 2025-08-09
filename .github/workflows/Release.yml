@@ -3,7 +3,7 @@ name: Prod-> Deploy Python Chat App to Prod
 on:
   push:
     branches:
-      - production # Triggers the workflow on any push to the 'production' branch
+      - production # Triggers the workflow on push to the 'production' branch
 
 jobs:
   deploy:
@@ -19,11 +19,15 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan 3.29.210.231 >> ~/.ssh/known_hosts
 
+      - name: Fix file permissions on server
+        run: |
+          ssh -i ~/.ssh/id_ed25519 ubuntu@3.29.210.231 "sudo chown -R ubuntu:ubuntu /var/www/dsmart.ai/chatApi/"
+
       - name: Deploy to production via rsync
         run: |
           rsync -avz --delete -e "ssh -i ~/.ssh/id_ed25519" ./* ubuntu@3.29.210.231:/var/www/dsmart.ai/chatApi/
 
-      - name: Create .env, install dependencies, fix permissions, and restart service
+      - name: Create .env, install dependencies, and restart service
         run: |
           ssh -i ~/.ssh/id_ed25519 ubuntu@3.29.210.231 "sudo /bin/bash -c 'cd /var/www/dsmart.ai/chatApi/ && \
             echo \"API_KEY=${{ secrets.PROD_API_KEY }}\" > .env && \
@@ -37,5 +41,4 @@ jobs:
             echo \"AWS_REGION=${{ secrets.AWS_REGION }}\" >> .env && \
             source venv/bin/activate && \
             pip install -r requirements.txt && \
-            sudo chown -R ubuntu:ubuntu /var/www/dsmart.ai/chatApi/ && \
             sudo systemctl restart chat.dsmart.ai.service'"
