@@ -3,7 +3,7 @@ name: Prod-> Deploy Python Chat App to Prod
 on:
   push:
     branches:
-      - production # Triggers the workflow on any push to the 'production' branch
+      - production # Triggers the workflow on push to the 'production' branch
 
 jobs:
   deploy:
