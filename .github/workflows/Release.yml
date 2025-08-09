@@ -25,7 +25,7 @@ jobs:
 
       - name: Create .env, install dependencies, and restart service
         run: |
-          ssh -i ~/.ssh/id_ed25519 ubuntu@40.172.224.136 "sudo /bin/bash -c 'cd /var/www/dsmart.ai/chatApi/ && \
+          ssh -i ~/.ssh/id_ed25519 ubuntu@3.29.210.231 "sudo /bin/bash -c 'cd /var/www/dsmart.ai/chatApi/ && \
             echo \"API_KEY=${{ secrets.PROD_API_KEY }}\" > .env && \
             echo \"DB_HOST=${{ secrets.PROD_DB_HOST }}\" >> .env && \
             echo \"DB_USER=${{ secrets.PROD_DB_USER }}\" >> .env && \
