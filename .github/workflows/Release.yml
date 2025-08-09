@@ -1,0 +1,40 @@
+name: Prod-> Deploy Python Chat App to Prod
+
+on:
+  push:
+    branches:
+      - production # Triggers the workflow on push to the 'production' branch
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Configure SSH private key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PROD_DEPLOY_KEY_SSH }}" | tr -d '\r' > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan 3.29.210.231 >> ~/.ssh/known_hosts
+
+      - name: Deploy to staging via rsync
+        run: |
+          rsync -avz --delete -e "ssh -i ~/.ssh/id_ed25519" ./* ubuntu@3.29.210.231:/var/www/dsmart.ai/chatApi/
+
+      - name: Create .env, install dependencies, and restart service
+        run: |
+          ssh -i ~/.ssh/id_ed25519 ubuntu@40.172.224.136 "sudo /bin/bash -c 'cd /var/www/dsmart.ai/chatApi/ && \
+            echo \"API_KEY=${{ secrets.PROD_API_KEY }}\" > .env && \
+            echo \"DB_HOST=${{ secrets.PROD_DB_HOST }}\" >> .env && \
+            echo \"DB_USER=${{ secrets.PROD_DB_USER }}\" >> .env && \
+            echo \"DB_PASSWORD=${{ secrets.PROD_DB_PASSWORD }}\" >> .env && \
+            echo \"DB_DATABASE=${{ secrets.PROD_DB_DATABASE }}\" >> .env && \
+            echo \"DB_DRIVER=${{ secrets.PROD_DB_DRIVER_STAGING }}\" >> .env && \
+            echo \"AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}\" >> .env && \
+            echo \"AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}\" >> .env && \
+            echo \"AWS_REGION=${{ secrets.AWS_REGION }}\" >> .env && \
+            source venv/bin/activate && \
+            pip install -r requirements.txt && \
+            sudo systemctl restart chat.dsmart.ai.service'"
