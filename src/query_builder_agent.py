@@ -87,18 +87,24 @@ def build_query(criteria: SearchCriteria) -> Tuple[str, Dict[str, Any]]:
         # Start building dynamic WHERE clause
         where_conditions = []
         
+        # # Doctor name search (high priority)
+        # if criteria.doctor_name:
+        #     doctor_name = criteria.doctor_name.replace("'", "''")
+        #     #where_conditions.append(f"AND (le.DocName_en LIKE N'%{doctor_name}%' OR le.DocName_ar LIKE N'%{doctor_name}%')")
+        #     where_conditions.append(f"""AND (SELECT STRING_AGG( N'(le.DocName_en LIKE N''%'+ value + N'%'' OR le.DocName_ar LIKE N''%'+ value + N'%'' )',N' AND ') FROM STRING_SPLIT(N'{doctor_name}', N' ')) = (N'(le.DocName_en LIKE N''%{doctor_name}%'' OR le.DocName_ar LIKE N''%{doctor_name}%'')')""")
+        # # Hospital/branch name search
+        # if criteria.branch_name:
+        #     branch_name = criteria.branch_name.replace("'", "''")
+        #     #where_conditions.append(f"AND (bg.BranchName_en LIKE N'%{branch_name}%' OR bg.BranchName_ar LIKE N'%{branch_name}%')")
+        #    where_conditions.append( f"""AND (SELECT STRING_AGG( N'(bg.BranchName_en LIKE N''%'+ value + N'%'' OR bg.BranchName_ar LIKE N''%'+ value + N'%'' )', N' AND ')FROM STRING_SPLIT(N'{branch_name}', N' ')) = (N'(bg.BranchName_en LIKE N''%{branch_name}%'' OR bg.BranchName_ar LIKE N''%{branch_name}%'')')""")
+
         # Doctor name search (high priority)
         if criteria.doctor_name:
-            doctor_name = criteria.doctor_name.replace("'", "''")
-            #where_conditions.append(f"AND (le.DocName_en LIKE N'%{doctor_name}%' OR le.DocName_ar LIKE N'%{doctor_name}%')")
-            where_conditions.append(f"""AND (SELECT STRING_AGG( N'(le.DocName_en LIKE N''%'+ value + N'%'' OR le.DocName_ar LIKE N''%'+ value + N'%'' )',N' AND ') FROM STRING_SPLIT(N'{doctor_name}', N' ')) = (N'(le.DocName_en LIKE N''%{doctor_name}%'' OR le.DocName_ar LIKE N''%{doctor_name}%'')')""")
+            where_conditions.append(build_multi_word_like_clause("le.DocName", criteria.doctor_name))
+
         # Hospital/branch name search
         if criteria.branch_name:
-            branch_name = criteria.branch_name.replace("'", "''")
-            #where_conditions.append(f"AND (bg.BranchName_en LIKE N'%{branch_name}%' OR bg.BranchName_ar LIKE N'%{branch_name}%')")
-            where_conditions.append( f"""AND (SELECT STRING_AGG( N'(bg.BranchName_en LIKE N''%'+ value + N'%'' OR bg.BranchName_ar LIKE N''%'+ value + N'%'' )', N' AND ')FROM STRING_SPLIT(N'{branch_name}', N' ')) = (N'(bg.BranchName_en LIKE N''%{branch_name}%'' OR bg.BranchName_ar LIKE N''%{branch_name}%'')')""")
-
-        
+            where_conditions.append(build_multi_word_like_clause("bg.BranchName", criteria.branch_name))
         
         # Hospital name (if different from branch name)
         if criteria.hospital_name and criteria.hospital_name != criteria.branch_name:
@@ -191,6 +197,25 @@ def build_query(criteria: SearchCriteria) -> Tuple[str, Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Error building query: {str(e)}")
         raise
+def build_multi_word_like_clause(field_prefix: str, phrase: str) -> str:
+    """
+    Build a dynamic WHERE clause part for multi-word AND search on English and Arabic fields.
+
+    :param field_prefix: The table alias and field prefix, e.g. 'bg.BranchName'
+    :param phrase: The user input phrase
+    :return: A string like:
+        AND ((bg.BranchName_en LIKE N'%word1%' OR bg.BranchName_ar LIKE N'%word1%') AND (bg.BranchName_en LIKE N'%word2%' OR bg.BranchName_ar LIKE N'%word2%'))
+    """
+    # Escape single quotes in phrase for T-SQL
+    safe_phrase = phrase.replace("'", "''").strip()
+    if not safe_phrase:
+        return ""
+
+    words = safe_phrase.split()
+    conditions = [
+        f"({field_prefix}_en LIKE N'%{word}%' OR {field_prefix}_ar LIKE N'%{word}%')" for word in words
+    ]
+    return "AND (" + " AND ".join(conditions) + ")"
 
 def normalize_specialty(specialty_name: str) -> dict:
     """
