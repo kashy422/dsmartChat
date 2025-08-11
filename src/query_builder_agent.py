@@ -90,17 +90,47 @@ def build_query(criteria: SearchCriteria) -> Tuple[str, Dict[str, Any]]:
         # Doctor name search (high priority)
         if criteria.doctor_name:
             doctor_name = criteria.doctor_name.replace("'", "''")
-            where_conditions.append(f"AND (le.DocName_en LIKE N'%{doctor_name}%' OR le.DocName_ar LIKE N'%{doctor_name}%')")
-        
+            #where_conditions.append(f"AND (le.DocName_en LIKE N'%{doctor_name}%' OR le.DocName_ar LIKE N'%{doctor_name}%')")
+            where_conditions.append(f"""AND (
+                                                SELECT STRING_AGG(
+                                                    N'(le.DocName_en LIKE N''%'+ value + N'%'' OR le.DocName_ar LIKE N''%'+ value + N'%'' )',
+                                                    N' AND '
+                                                )
+                                                FROM STRING_SPLIT(N'{doctor_name}', N' ')
+                                            ) = (
+                                                N'(le.DocName_en LIKE N''%{doctor_name}%'' OR le.DocName_ar LIKE N''%{doctor_name}%'')'
+                                            )
+                                        """)
         # Hospital/branch name search
         if criteria.branch_name:
             branch_name = criteria.branch_name.replace("'", "''")
-            where_conditions.append(f"AND (bg.BranchName_en LIKE N'%{branch_name}%' OR bg.BranchName_ar LIKE N'%{branch_name}%')")
-            
+            #where_conditions.append(f"AND (bg.BranchName_en LIKE N'%{branch_name}%' OR bg.BranchName_ar LIKE N'%{branch_name}%')")
+            where_conditions.append(f"""AND (
+                                            SELECT STRING_AGG(
+                                                N'(bg.BranchName_en LIKE N''%'+ value + N'%'' OR bg.BranchName_ar LIKE N''%'+ value + N'%'' )',
+                                                N' AND '
+                                            )
+                                            FROM STRING_SPLIT(N'{branch_name}', N' ')
+                                        ) = (
+                                            N'(bg.BranchName_en LIKE N''%{branch_name}%'' OR bg.BranchName_ar LIKE N''%{branch_name}%'')'
+                                        )
+                                        """)
+        
+        
         # Hospital name (if different from branch name)
         if criteria.hospital_name and criteria.hospital_name != criteria.branch_name:
             hospital_name = criteria.hospital_name.replace("'", "''")
-            where_conditions.append(f"AND (bg.BranchName_en LIKE N'%{hospital_name}%' OR bg.BranchName_ar LIKE N'%{hospital_name}%')")
+           # where_conditions.append(f"AND (bg.BranchName_en LIKE N'%{hospital_name}%' OR bg.BranchName_ar LIKE N'%{hospital_name}%')")
+            where_conditions.append(f"""AND (
+                                            SELECT STRING_AGG(
+                                                N'(bg.BranchName_en LIKE N''%'+ value + N'%'' OR bg.BranchName_ar LIKE N''%'+ value + N'%'' )',
+                                                N' AND '
+                                            )
+                                            FROM STRING_SPLIT(N'{hospital_name}', N' ')
+                                        ) = (
+                                            N'(bg.BranchName_en LIKE N''%{hospital_name}%'' OR bg.BranchName_ar LIKE N''%{hospital_name}%'')'
+                                        )
+                                        """)
         
         # Specialty and subspecialty search
         if criteria.speciality:
