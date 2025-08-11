@@ -754,6 +754,10 @@ def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
            * "I have tooth pain" -> {"speciality": "dentist", "subspeciality": "Endodontics"}
            * "Where can I get implants" -> {"speciality": "dentist", "subspeciality": "Dental Implants"}
         
+        8- Make sure you are taking care and giving priority to user intent about what is being searched. for Examples
+		   - Make sure common nouns for hospitals and clinics are stripped both in English and Arabic eg Clinic, Clinics, عيادة, عيادات or any other similar kind of words or pronouns.
+		   - Try to understand of user has intention to find a certain named doctor or using some adjectives to explain it. For example, Who is best doctor in Loran clinic, مين افضل دكتور عياده ديب كير. So always focus on nouns, pro-nouns when creating quires search criteria. 
+
         Return ONLY a JSON object with these fields (include only if mentioned):
         {
             "speciality": "string (in English)",
