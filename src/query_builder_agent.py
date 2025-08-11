@@ -96,7 +96,18 @@ def build_query(criteria: SearchCriteria) -> Tuple[str, Dict[str, Any]]:
         if criteria.branch_name:
             branch_name = criteria.branch_name.replace("'", "''")
             #where_conditions.append(f"AND (bg.BranchName_en LIKE N'%{branch_name}%' OR bg.BranchName_ar LIKE N'%{branch_name}%')")
-            where_conditions.append(f"""AND (SELECT STRING_AGG(N'(bg.BranchName_en LIKE N''%'+ value + N'%'' OR bg.BranchName_ar LIKE N''%'+ value + N'%'' )',N' AND ') FROM STRING_SPLIT(N'{branch_name}', N' ')) = (N'(bg.BranchName_en LIKE N''%{branch_name}%'' OR bg.BranchName_ar LIKE N''%{branch_name}%'')')""")
+            where_clause.append( f"""
+                                AND (
+                                SELECT STRING_AGG(
+                                    N'(bg.BranchName_en LIKE N''%'+ value + N'%'' OR bg.BranchName_ar LIKE N''%'+ value + N'%'' )',
+                                    N' AND '
+                                )
+                                FROM STRING_SPLIT(N'{branch_name}', N' ')
+                                ) = (
+                                N'(bg.BranchName_en LIKE N''%{branch_name}%'' OR bg.BranchName_ar LIKE N''%{branch_name}%'')'
+                                )
+                                """)
+
         
         
         # Hospital name (if different from branch name)
