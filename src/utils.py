@@ -1,6 +1,6 @@
 from typing import Any, Optional, Union
 from datetime import datetime
-from langchain_core.callbacks import BaseCallbackHandler
+# Removed LangChain dependencies
 import json 
 import urllib.parse
 import threading
@@ -115,7 +115,7 @@ def get_language_code(text: str) -> str:
         return 'en'
 
 
-class CustomCallBackHandler(BaseCallbackHandler):
+class CustomCallBackHandler:
     def __init__(self):
         self.docs_data = {}  # Stores doctor-related data
         self.patient_data = {}  # Stores patient data, keyed by session_id

@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from io import BytesIO
 from fastapi.middleware.cors import CORSMiddleware
 import base64
-from .agent import chat_engine
+from .agent import SimpleMedicalAgent
 from .utils import CustomCallBackHandler, thread_local, setup_improved_logging, log_thread_local_state
 from src.AESEncryptor import AESEncryptor
 from typing import Dict, List, Any, Optional
@@ -151,7 +151,7 @@ class ArabicJSONResponse(JSONResponse):
 
 # Create FastAPI app with our custom JSON response class as default
 app = FastAPI(default_response_class=ArabicJSONResponse)
-engine = chat_engine()
+engine = SimpleMedicalAgent()
 callBackHandler = CustomCallBackHandler()
 encryptor = AESEncryptor(os.getenv("ENCRYPTION_SALT", "default_salt"))
 
@@ -328,37 +328,15 @@ def process_message(message: str, session_id: str, lat: Optional[float] = None, 
             logger.info(f"Using coordinates: lat={lat}, long={long}")
         
         # Forward the message to the agent and get response
-        response = engine.invoke(
-            {
-                "input": message, 
-                "session_id": session_id,
-                "lat": lat,
-                "long": long
-            },
-            config={
-                "configurable": {"session_id": session_id},
-                "callbacks": [callBackHandler]
-            }
-        )
+        response = engine.process_message(message, session_id)
         
         # Return the response without wrapping it in another response object
         return response
 
     except Exception as e:
         logger.error(f"Error processing message: {str(e)}")
-        try:
-            # Get LLM's response for error handling
-            error_response = client.chat.completions.create(
-                model="gpt-4o-mini-2024-07-18",
-                messages=[
-                    {"role": "system", "content": "You are a medical assistant. Provide a natural error response that matches the conversation style."},
-                    {"role": "user", "content": f"There was an error processing the request. Generate an apologetic response in the same language style as the conversation."}
-                ]
-            )
-            error_message = error_response.choices[0].message.content
-        except Exception as llm_error:
-            logger.error(f"Error getting LLM error response: {str(llm_error)}")
-            error_message = ""  # Empty message will be handled by main LLM
+        # Main agent handles error responses - no additional AI calls
+        error_message = "I apologize, but I encountered an error while processing your request. Please try rephrasing your question or contact support if the issue persists."
         
         return {
             "response": {
@@ -384,6 +362,9 @@ async def analyze_image(request: ImageRequest):
             raise HTTPException(status_code=400, detail="Invalid base64 image format")
 
         # Call OpenAI API
+        logger.info("********************************")
+        logger.info("CALLING IMAGE ANALYSIS AGENT")
+        logger.info("********************************")
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[

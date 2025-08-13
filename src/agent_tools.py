@@ -1,4 +1,4 @@
-from langchain_core.tools import tool, StructuredTool
+# Removed LangChain dependencies - using direct function definitions
 from pydantic import BaseModel, Field
 from typing import List, Optional, Union, Dict, Any
 import logging
@@ -338,15 +338,7 @@ def store_patient_details(
             "error": str(e)
         }
 
-# Create a StructuredTool for store_patient_details
-store_patient_details_tool = StructuredTool.from_function(
-    func=store_patient_details,
-    name="store_patient_details",
-    description="Store basic details of a patient",
-    args_schema=StorePatientDetails,
-    return_direct=False,
-    handle_tool_error="Patient Details Incomplete",
-)
+# Function is now directly callable (removed LangChain wrapper)
 
 def profile(func):
     """Simple profiling decorator to track function execution time"""
@@ -359,7 +351,7 @@ def profile(func):
         return result
     return wrapper
 
-@tool(return_direct=False)
+# Regular function (removed LangChain decorator)
 @profile
 def dynamic_doctor_search(search_query: Union[str, dict]) -> dict:
     """
@@ -820,7 +812,7 @@ def ensure_proper_doctor_search_format(result: Dict[str, Any], query: str) -> Di
     logger.info(f"🎁 [ensure_proper_doctor_search_format] RETURNING: {len(doctors)} doctors, {len(standardized_result['response'].get('offers', []))} offers")
     return standardized_result
 
-@tool(return_direct=False)
+# Regular function (removed LangChain decorator)
 @profile
 def analyze_symptoms(symptom_description: str) -> Dict[str, Any]:
     """
@@ -927,12 +919,4 @@ def analyze_symptoms(symptom_description: str) -> Dict[str, Any]:
             "detailed_analysis": {"error": str(e)}
         }
 
-# Create a StructuredTool for symptom analysis
-analyze_symptoms_tool = StructuredTool.from_function(
-    func=analyze_symptoms,
-    name="analyze_symptoms",
-    description="Analyze patient symptoms to determine appropriate medical specialties",
-    args_schema=AnalyzeSymptomInput,
-    return_direct=False,
-    handle_tool_error="Could not analyze symptoms. Please try again with more details."
-)
+# Function is now directly callable (removed LangChain wrapper)

@@ -807,6 +807,9 @@ def extract_search_criteria_from_message(message: str) -> Dict[str, Any]:
             {"role": "user", "content": message}
         ]
         
+        root_logger.info("********************************")
+        root_logger.info("CALLING QUERY BUILDER AGENT")
+        root_logger.info("********************************")
         root_logger.info("🤖 Calling GPT for criteria extraction...")
         
         # Call GPT to extract criteria with improved configuration

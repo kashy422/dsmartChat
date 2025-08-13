@@ -252,6 +252,9 @@ def detect_symptoms_and_specialties(user_message: str) -> Dict[str, Any]:
         """
         
         # Call GPT to analyze the message
+        logger.info("********************************")
+        logger.info("CALLING SPECIALTY MATCHER AGENT")
+        logger.info("********************************")
         logger.info(f"SYMPTOM ANALYZER: Calling GPT for unified symptom detection and analysis")
         gpt_start_time = time.time()
         
