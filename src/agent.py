@@ -1147,20 +1147,28 @@ class SimpleMedicalAgent:
     ) -> dict:
         """Process a user message and return a response - API entry point"""
         logger.info(f"📩 Processing message via API: {message}")
+        logger.info(f"🔍 DEBUG: process_message received lat={lat}, long={long}")
 
         # Convert to the format expected by invoke method
         data = {"input": message, "session_id": session_id, "lat": lat, "long": long}
+        logger.info(f"🔍 DEBUG: data dict created: {data}")
 
         return self.invoke(data)
 
     def invoke(self, data: dict) -> dict:
         """Process a user message and return a response - internal method"""
+        logger.info(f"🔍 DEBUG: invoke method received data: {data}")
+        
         user_message = data.get("input", "")
         session_id = data.get("session_id", "")
         lat = data.get("lat")
         long = data.get("long")
 
         logger.info(f"Processing message: '{user_message}' for session {session_id}")
+        logger.info(f"🔍 DEBUG: lat={lat}, long={long} at start of invoke method")
+        logger.info(f"🔍 DEBUG: data.get('lat') = {data.get('lat')}, data.get('long') = {data.get('long')}")
+        logger.info(f"🔍 DEBUG: data keys: {list(data.keys())}")
+        logger.info(f"🔍 DEBUG: data values: {list(data.values())}")
 
         try:
             # Get history for processing
@@ -1261,20 +1269,17 @@ class SimpleMedicalAgent:
             # Let the main agent decide which tools to call based on the user message
             # No hardcoded tool calls - the agent will use tools as needed
 
-            # Add coordinates context to the system message if available
-            if lat is not None and long is not None:
-                coordinate_context = f"\n\n📍 CURRENT LOCATION: Latitude: {lat}, Longitude: {long}\nIMPORTANT: When calling search_doctors_dynamic tool, ALWAYS include these coordinates: latitude={lat}, longitude={long}"
-                # Update the system message with coordinates
-                for msg in messages:
-                    if msg["role"] == "system":
-                        msg["content"] += coordinate_context
-                        break
+            # Coordinates will be handled directly in tool call processing
+            # The approach: intercept tool calls, correct coordinates if needed, and ensure
+            # corrected values are used during actual tool execution
 
             # Now let the main agent handle everything through tools
             # This is the SINGLE AI call that handles everything
             logger.info("********************************")
             logger.info("CALLING SIMPLE MEDICAL AGENT")
             logger.info("********************************")
+            logger.info(f"🔍 DEBUG: lat={lat}, long={long} before AI call")
+            
             response = client.chat.completions.create(
                 model="gpt-4o-mini-2024-07-18",
                 messages=messages,
@@ -1291,6 +1296,7 @@ class SimpleMedicalAgent:
                 logger.info(
                     f"🔧 Model requested tool call: {response_message.tool_calls}"
                 )
+                logger.info(f"🔍 DEBUG: lat={lat}, long={long} before tool call processing")
 
                 # First add the assistant message with tool calls
                 messages.append(response_message.model_dump())
@@ -1302,6 +1308,49 @@ class SimpleMedicalAgent:
                     except json.JSONDecodeError as e:
                         logger.error(f"❌ Error parsing tool arguments: {str(e)}")
                         function_args = {}
+
+                    # CRITICAL: Ensure coordinates are properly set for search_doctors_dynamic
+                    if function_name == "search_doctors_dynamic" and lat is not None and long is not None:
+                        logger.info(f"🔧 COORDINATE CORRECTION: Starting for {function_name}")
+                        logger.info(f"🔧 COORDINATE CORRECTION: Expected coordinates: lat={lat}, long={long}")
+                        
+                        # Log original arguments for debugging
+                        logger.info(f"🔧 Original search_doctors_dynamic arguments: {function_args}")
+                        
+                        # Force the correct coordinates if they're missing or incorrect
+                        if "latitude" not in function_args or function_args["latitude"] == 0 or function_args["latitude"] == 0.0:
+                            function_args["latitude"] = lat
+                            logger.info(f"🔧 Fixed latitude from {function_args.get('latitude', 'missing')} to {lat}")
+                        if "longitude" not in function_args or function_args["longitude"] == 0 or function_args["longitude"] == 0.0:
+                            function_args["longitude"] = long
+                            logger.info(f"🔧 Fixed longitude from {function_args.get('longitude', 'missing')} to {long}")
+                        
+                        # Log the corrected arguments
+                        logger.info(f"🔧 Corrected search_doctors_dynamic arguments: {function_args}")
+                        
+                        # Final validation
+                        if function_args.get("latitude") == lat and function_args.get("longitude") == long:
+                            logger.info(f"✅ Coordinates validated: lat={function_args['latitude']}, long={function_args['longitude']}")
+                        else:
+                            logger.error(f"❌ Coordinate validation failed: expected lat={lat}, long={long}, got lat={function_args.get('latitude')}, long={function_args.get('longitude')}")
+                        
+                        # Update the tool call arguments to ensure the corrected values are used
+                        tool_call.function.arguments = json.dumps(function_args)
+                        logger.info(f"🔧 Updated tool call arguments with corrected coordinates")
+                        
+                        # IMPORTANT: Store corrected arguments for use in tool execution
+                        # This ensures the corrected coordinates are used when the tool is actually executed
+                        if not hasattr(tool_call, '_corrected_args'):
+                            tool_call._corrected_args = function_args.copy()
+                        else:
+                            tool_call._corrected_args.update(function_args)
+                        
+                        logger.info(f"🔧 Stored corrected arguments in tool_call._corrected_args: {tool_call._corrected_args}")
+                    else:
+                        if function_name == "search_doctors_dynamic":
+                            logger.warning(f"⚠️ COORDINATE CORRECTION: Skipped - lat={lat}, long={long}")
+                        else:
+                            logger.info(f"🔧 COORDINATE CORRECTION: Not needed for {function_name}")
 
                     # Display tool call header
                     tool_header = f"""
@@ -1498,20 +1547,38 @@ class SimpleMedicalAgent:
                                 }
 
                     elif function_name == "search_doctors_dynamic":
-                        logger.info(
-                            f"🔍 Processing search_doctors_dynamic: {function_args}"
-                        )
+                        logger.info(f"🔍 TOOL EXECUTION: Starting search_doctors_dynamic")
+                        logger.info(f"🔍 TOOL EXECUTION: Original function_args: {function_args}")
 
-                        # Extract parameters
-                        user_message = function_args.get("user_message", "")
-                        latitude = function_args.get("latitude")
-                        longitude = function_args.get("longitude")
+                        # Use corrected arguments if available (from coordinate correction)
+                        if hasattr(tool_call, '_corrected_args'):
+                            corrected_args = tool_call._corrected_args
+                            logger.info(f"🔧 Using corrected arguments: {corrected_args}")
+                            # Use corrected coordinates
+                            latitude = corrected_args.get("latitude")
+                            longitude = corrected_args.get("longitude")
+                            user_message = corrected_args.get("user_message", function_args.get("user_message", ""))
+                            logger.info(f"🔧 TOOL EXECUTION: Using corrected coordinates: lat={latitude}, long={longitude}")
+                        else:
+                            # Fallback to original arguments
+                            latitude = function_args.get("latitude")
+                            longitude = function_args.get("longitude")
+                            user_message = function_args.get("user_message", "")
+                            logger.warning(f"⚠️ TOOL EXECUTION: No corrected arguments found, using original: lat={latitude}, long={longitude}")
 
+                        # Log the coordinates being used
+                        logger.info(f"🔍 Using coordinates: lat={latitude}, long={longitude}")
+                        
                         # Validate coordinates
                         if latitude is None or longitude is None:
                             logger.error("❌ Missing coordinates for doctor search")
                             result = {
                                 "error": "Coordinates are required for doctor search"
+                            }
+                        elif latitude == 0 or latitude == 0.0 or longitude == 0 or longitude == 0.0:
+                            logger.error(f"❌ Invalid coordinates detected: lat={latitude}, long={longitude}")
+                            result = {
+                                "error": f"Invalid coordinates: lat={latitude}, long={longitude}. Expected non-zero values."
                             }
                         else:
                             try:
@@ -1521,6 +1588,8 @@ class SimpleMedicalAgent:
                                     "latitude": float(latitude),
                                     "longitude": float(longitude),
                                 }
+
+                                logger.info(f"🔍 Final search criteria: {search_criteria}")
 
                                 # Call the doctor search function
                                 search_result = dynamic_doctor_search(

@@ -328,7 +328,7 @@ def process_message(message: str, session_id: str, lat: Optional[float] = None, 
             logger.info(f"Using coordinates: lat={lat}, long={long}")
         
         # Forward the message to the agent and get response
-        response = engine.process_message(message, session_id)
+        response = engine.process_message(message, session_id, lat, long)
         
         # Return the response without wrapping it in another response object
         return response
