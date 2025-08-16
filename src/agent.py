@@ -306,7 +306,7 @@ User: "i am hammad and 23 years old" → Call `store_patient_details`
 ---
 
 ## ❌ **NEVER DO:**
-- NEVER call `analyze_symptoms` when specialties already detected
+- NEVER call `analyze_symptoms` when EXACT SAME symptoms already analyzed
 - NEVER call `store_patient_details` when patient info complete
 - NEVER call `search_doctors_dynamic` without specialties (unless direct search)
 - **NEVER ask for location** - GPS coordinates are already available automatically
@@ -354,6 +354,19 @@ User: "i am hammad and 23 years old" → Call `store_patient_details`
 - User: "I'm Ahmed, 28" → Call store_patient_details with Name="Ahmed", Age=28, Gender="Male"
 - User: "i am hammad and 23 years old" → Call store_patient_details with Name="hammad", Age=23, Gender="Male"
 
+**EXAMPLES of when to call search_doctors_dynamic:**
+- User: "find me dentists" → Call search_doctors_dynamic
+- User: "can you find me dentists from loran clinic" → Call search_doctors_dynamic
+- User: "I need a doctor" → Call search_doctors_dynamic
+- User: "search for cardiologists" → Call search_doctors_dynamic
+- User: "looking for dr saleh" → Call search_doctors_dynamic
+- User: "find me doctors at glam clinic" → Call search_doctors_dynamic
+
+**EXAMPLES of when to call analyze_symptoms:**
+- User: "I have gum pain" → Call analyze_symptoms
+- User: "my tooth hurts" → Call analyze_symptoms
+- User: "I have jaw pain and teeth alignment issues" → Call analyze_symptoms
+
 ---
 
 ## 🩺 **SPECIALTY DETECTION RULES (CRITICAL):**
@@ -361,19 +374,21 @@ User: "i am hammad and 23 years old" → Call `store_patient_details`
 **When to call `analyze_symptoms`:**
 - User describes NEW symptoms: "I have gum pain", "my tooth hurts", "chest pain"
 - User asks about symptoms: "what causes toothache?", "why do I have gum pain?"
-- **NEVER call if specialties already detected for current issue**
+- User describes DIFFERENT symptoms from what was previously analyzed: "now I have jaw pain" (after gum pain)
+- **Call for NEW or DIFFERENT symptoms, skip for EXACT SAME symptoms**
 
 **When NOT to call `analyze_symptoms`:**
-- Specialties are already detected and stored in patient data
+- User describes the EXACT SAME symptoms that were already analyzed
 - User is confirming they want a doctor search (says "yes", "okay", "please", "sure", etc.)
 - You're in a follow-up conversation about finding doctors
 - Patient information is already complete (Name, Age, Gender provided)
 
 **CRITICAL CONTEXT AWARENESS:**
-- **NEVER call `analyze_symptoms` if specialties exist in patient data**
+- **Call `analyze_symptoms` for NEW or DIFFERENT symptoms (even if specialties exist)**
+- **Skip `analyze_symptoms` only for EXACT SAME symptoms already analyzed**
 - **ALWAYS call `search_doctors_dynamic` when user wants doctors**
-- **Use existing specialties for doctor search**
-- **Only call `analyze_symptoms` if user describes COMPLETELY NEW symptoms**
+- **Use existing specialties for doctor search when appropriate**
+- **The tool will automatically clear old specialties when analyzing new symptoms**
 
 **When User Confirms Doctor Search:**
 - **If specialties detected**: Call `search_doctors_dynamic` immediately
@@ -390,6 +405,14 @@ User: "i am hammad and 23 years old" → Call `store_patient_details`
 - **Present information as already available and complete**
 - **Act as if you already have all the information you need**
 - **NEVER ask for location** - GPS is already available automatically
+
+## 🔧 **TOOL EXECUTION RULES (CRITICAL):**
+- **ALWAYS call `search_doctors_dynamic` when user asks to find doctors, search for doctors, or wants doctor recommendations**
+- **ALWAYS call `analyze_symptoms` when user describes NEW or DIFFERENT symptoms**
+- **ALWAYS call `store_patient_details` when user provides personal information**
+- **NEVER provide direct responses for doctor searches - ALWAYS use the tool**
+- **NEVER provide direct responses for symptom analysis - ALWAYS use the tool**
+- **The tools will provide the actual data - you just present it naturally**
 
 ⚠️ **FINAL WARNING**: Your response will be shown directly to the user. Make sure it contains ONLY natural conversation and NO technical details, tool calls, or system information.
 """
@@ -592,6 +615,88 @@ store = {}
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY"))
 
 
+def detect_direct_search_criteria(user_message: str) -> dict:
+    """
+    Detect direct search criteria from user message like doctor names, clinic names, hospital names.
+    Returns a dict with detected criteria or empty dict if none found.
+    """
+    if not user_message:
+        return {}
+    
+    user_message_lower = user_message.lower()
+    detected_criteria = {}
+    
+    # Common patterns for doctor names
+    doctor_patterns = [
+        r"dr\.?\s+([a-zA-Z\s]+)",  # Dr. Name or Dr Name
+        r"doctor\s+([a-zA-Z\s]+)",  # Doctor Name
+        r"find\s+me\s+dr\.?\s+([a-zA-Z\s]+)",  # find me Dr. Name
+        r"looking\s+for\s+dr\.?\s+([a-zA-Z\s]+)",  # looking for Dr. Name
+        r"search\s+for\s+dr\.?\s+([a-zA-Z\s]+)",  # search for Dr. Name
+    ]
+    
+    for pattern in doctor_patterns:
+        match = re.search(pattern, user_message_lower)
+        if match:
+            doctor_name = match.group(1).strip()
+            if len(doctor_name) > 2:  # Avoid very short names
+                detected_criteria["doctor_name"] = doctor_name
+                break
+    
+    # Common patterns for clinic names
+    clinic_patterns = [
+        r"from\s+([a-zA-Z\s]+)\s+clinic",  # from X clinic
+        r"at\s+([a-zA-Z\s]+)\s+clinic",  # at X clinic
+        r"in\s+([a-zA-Z\s]+)\s+clinic",  # in X clinic
+        r"([a-zA-Z\s]+)\s+clinic",  # X clinic
+        r"clinic\s+([a-zA-Z\s]+)",  # clinic X
+    ]
+    
+    for pattern in clinic_patterns:
+        match = re.search(pattern, user_message_lower)
+        if match:
+            clinic_name = match.group(1).strip()
+            if len(clinic_name) > 2:  # Avoid very short names
+                detected_criteria["clinic_name"] = clinic_name
+                break
+    
+    # Common patterns for hospital names
+    hospital_patterns = [
+        r"from\s+([a-zA-Z\s]+)\s+hospital",  # from X hospital
+        r"at\s+([a-zA-Z\s]+)\s+hospital",  # at X hospital
+        r"in\s+([a-zA-Z\s]+)\s+hospital",  # in X hospital
+        r"([a-zA-Z\s]+)\s+hospital",  # X hospital
+        r"hospital\s+([a-zA-Z\s]+)",  # hospital X
+    ]
+    
+    for pattern in hospital_patterns:
+        match = re.search(pattern, user_message_lower)
+        if match:
+            hospital_name = match.group(1).strip()
+            if len(hospital_name) > 2:  # Avoid very short names
+                detected_criteria["hospital_name"] = hospital_name
+                break
+    
+    # Common patterns for medical centers
+    center_patterns = [
+        r"from\s+([a-zA-Z\s]+)\s+center",  # from X center
+        r"at\s+([a-zA-Z\s]+)\s+center",  # at X center
+        r"in\s+([a-zA-Z\s]+)\s+center",  # in X center
+        r"([a-zA-Z\s]+)\s+center",  # X center
+        r"center\s+([a-zA-Z\s]+)",  # center X
+    ]
+    
+    for pattern in center_patterns:
+        match = re.search(pattern, user_message_lower)
+        if match:
+            center_name = match.group(1).strip()
+            if len(center_name) > 2:  # Avoid very short names
+                detected_criteria["clinic_name"] = center_name  # Treat centers as clinics
+                break
+    
+    return detected_criteria
+
+
 def get_session_history(session_id: str) -> ChatHistory:
     if session_id not in store:
         logger.info(
@@ -660,7 +765,7 @@ def format_tools_for_openai():
     # Tool definitions - cleaner approach with consistent descriptions
     tool_definitions = {
         "search_doctors_dynamic": {
-            "description": "Search for doctors based on user criteria. CRITICAL: This tool MUST be called when (1) user explicitly asks to find doctors, OR (2) user confirms doctor search after symptom analysis. If specialties are already detected in patient data, use them directly. If no specialties detected, suggest analyzing symptoms first. This is the FINAL step in the conversation flow.",
+            "description": "Search for doctors based on user criteria. CRITICAL: This tool MUST be called when (1) user explicitly asks to find doctors, OR (2) user confirms doctor search after symptom analysis. If specialties are already detected in patient data, use them directly. If no specialties detected, suggest analyzing symptoms first. This is the FINAL step in the conversation flow. NEVER provide direct responses for doctor searches - ALWAYS use this tool.",
             "params": {
                 "user_message": "The user's search request in natural language",
                 "latitude": "Latitude coordinate for location-based search (float)",
@@ -680,7 +785,7 @@ def format_tools_for_openai():
             "required": [],
         },
         "analyze_symptoms": {
-            "description": "Analyze patient symptoms to match with appropriate medical specialties. CRITICAL: ONLY use this tool if (1) user describes symptoms AND (2) no specialties have been detected yet in this conversation. If specialties are already detected in patient data, DO NOT call this tool again - use the stored specialties instead. This prevents redundant analysis and improves efficiency.",
+            "description": "Analyze patient symptoms to match with appropriate medical specialties. CRITICAL: Call this tool when (1) user describes NEW symptoms that haven't been analyzed yet, OR (2) user describes DIFFERENT symptoms from what was previously analyzed. If the user describes the EXACT SAME symptoms that were already analyzed, DO NOT call this tool again. This tool will automatically clear previous specialty data and analyze the new symptoms to provide updated medical recommendations.",
             "params": {
                 "symptom_description": "Description of symptoms or health concerns"
             },
@@ -1268,19 +1373,72 @@ class SimpleMedicalAgent:
                             elif function_name == "analyze_symptoms":
                                 logger.info(f"🏥 Analyzing symptoms: {function_args}")
                                 
-                                # Check if specialties are already detected to prevent redundant analysis
-                                if patient_data and patient_data.get("detected_specialties"):
-                                    logger.warning(f"⚠️ Specialties already detected: {patient_data['detected_specialties']}. Skipping redundant symptom analysis.")
+                                # ENHANCED: Check if symptoms are the same to prevent redundant analysis
+                                current_symptoms = patient_data.get("symptom_description", "").lower() if patient_data else ""
+                                new_symptoms = function_args.get("symptom_description", "").lower()
+                                
+                                # More intelligent symptom comparison - check if symptoms are substantially similar
+                                symptoms_are_similar = False
+                                if current_symptoms and new_symptoms:
+                                    # Normalize symptoms for comparison
+                                    current_normalized = current_symptoms.strip().replace(" ", "")
+                                    new_normalized = new_symptoms.strip().replace(" ", "")
+                                    
+                                    logger.info(f"🔍 Symptom comparison: Current='{current_symptoms}' vs New='{new_symptoms}'")
+                                    logger.info(f"🔍 Normalized comparison: Current='{current_normalized}' vs New='{new_normalized}'")
+                                    
+                                    # Check for exact match
+                                    if current_normalized == new_normalized:
+                                        symptoms_are_similar = True
+                                        logger.info(f"🔍 Exact match detected - symptoms are similar")
+                                    # Check if new symptoms are contained within current symptoms
+                                    elif current_normalized in new_normalized or new_normalized in current_normalized:
+                                        symptoms_are_similar = True
+                                        logger.info(f"🔍 Containment detected - symptoms are similar")
+                                    # Check for key symptom words - more lenient approach
+                                    else:
+                                        # Extract key medical terms for comparison
+                                        current_words = set(current_normalized.lower().split())
+                                        new_words = set(new_normalized.lower().split())
+                                        
+                                        # Remove common words that don't indicate different symptoms
+                                        common_words_to_ignore = {'i', 'have', 'am', 'my', 'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'since', 'last', 'night', 'morning', 'evening', 'today', 'yesterday'}
+                                        current_words = current_words - common_words_to_ignore
+                                        new_words = new_words - common_words_to_ignore
+                                        
+                                        if current_words and new_words:
+                                            common_words = current_words.intersection(new_words)
+                                            similarity_ratio = len(common_words) / min(len(current_words), len(new_words)) if min(len(current_words), len(new_words)) > 0 else 0
+                                            logger.info(f"🔍 Key words comparison: Current key words: {current_words}, New key words: {new_words}")
+                                            logger.info(f"🔍 Word similarity: {len(common_words)} common words out of {min(len(current_words), len(new_words))} min words (ratio: {similarity_ratio:.2f})")
+                                            if similarity_ratio >= 0.5:  # Lowered threshold to 50% for better detection
+                                                symptoms_are_similar = True
+                                                logger.info(f"🔍 High similarity detected - symptoms are similar")
+                                            else:
+                                                logger.info(f"🔍 Low similarity detected - symptoms are different")
+                                        else:
+                                            logger.info(f"🔍 No meaningful key words to compare - treating as different symptoms")
+                                            symptoms_are_similar = False
+                                else:
+                                    logger.info(f"🔍 No previous symptoms to compare against - proceeding with analysis")
+                                
+                                # Log the final symptom comparison decision
+                                logger.info(f"🔍 FINAL DECISION: Symptoms are {'SIMILAR' if symptoms_are_similar else 'DIFFERENT'}")
+                                
+                                # Check if this is a truly new/different symptom description
+                                if (patient_data and patient_data.get("detected_specialties") and 
+                                    symptoms_are_similar):
+                                    logger.warning(f"⚠️ Same symptoms already analyzed: '{current_symptoms}'. Skipping redundant symptom analysis.")
                                     # Create a result indicating specialties are already available
                                     result = {
                                         "specialities_already_detected": True,
                                         "existing_specialties": patient_data["detected_specialties"],
-                                        "message": "Specialties already detected from previous analysis. Use stored specialties for doctor search.",
+                                        "message": "These symptoms have already been analyzed. Use stored specialties for doctor search.",
                                         "symptoms_detected": patient_data.get("symptom_description", "").split(", ") if patient_data.get("symptom_description") else [],
                                         "top_specialties": [spec.get("specialty", "") for spec in patient_data["detected_specialties"]],
                                         "detailed_analysis": {
                                             "status": "skipped_redundant",
-                                            "message": "Skipped redundant symptom analysis - using stored specialties"
+                                            "message": "Skipped redundant symptom analysis - same symptoms already analyzed"
                                         }
                                     }
                                     
@@ -1293,8 +1451,13 @@ class SimpleMedicalAgent:
                                             "name": function_name,
                                         }
                                     )
-                                    logger.info(f"🔄 Skipped redundant symptom analysis - specialties already available: {patient_data['detected_specialties']}")
+                                    logger.info(f"🔄 Skipped redundant symptom analysis - same symptoms already analyzed: {current_symptoms}")
                                     continue  # Skip to next tool call
+                                elif patient_data and patient_data.get("detected_specialties"):
+                                    logger.info(f"🔄 New/different symptoms detected: '{new_symptoms}' vs previous: '{current_symptoms}'. Proceeding with new analysis.")
+                                    logger.info(f"🔄 Previous specialties will be cleared and replaced with new analysis results.")
+                                else:
+                                    logger.info(f"🔄 No previous specialties detected - proceeding with new symptom analysis")
                                 
                                 try:
                                     symptom_description = function_args.get("symptom_description", "")
@@ -1304,10 +1467,12 @@ class SimpleMedicalAgent:
                                         logger.info(
                                             f"🔄 Starting new symptom analysis - clearing previous {len(patient_data['detected_specialties'])} specialties"
                                         )
+                                        logger.info(f"🔄 Previous specialties: {patient_data['detected_specialties']}")
                                         patient_data.pop("detected_specialties", None)
                                         patient_data.pop("last_symptom_analysis", None)
                                         patient_data.pop("symptom_description", None)
                                         history.set_patient_data(patient_data)
+                                        logger.info(f"🔄 Cleared previous specialty data from patient_data")
 
                                     # Call symptom analysis
                                     symptom_result = analyze_symptoms(symptom_description)
@@ -1407,6 +1572,8 @@ class SimpleMedicalAgent:
                                         patient_data["symptom_description"] = symptom_description
                                         
                                         logger.info(f"🔄 Stored {len(cleaned_specialties)} cleaned specialties: {cleaned_specialties}")
+                                        logger.info(f"🔄 Updated symptom description to: {symptom_description}")
+                                        logger.info(f"🔄 Updated patient_data with new specialties and cleared old ones")
                                     else:
                                         # Clear any existing specialties if none detected
                                         if patient_data:
@@ -1491,8 +1658,69 @@ class SimpleMedicalAgent:
                                             "latitude": float(latitude),
                                             "longitude": float(longitude),
                                         }
+                                        
+                                        logger.info(f"🔍 Initial search criteria created: {search_criteria}")
+                                        logger.info(f"🔍 Original user request: '{user_message}'")
+
+                                        # ENHANCED: Smart search criteria prioritization
+                                        # Keep user message unchanged and pass parameters separately
+                                        search_criteria["user_message"] = user_message  # Always preserve original message
+                                        
+                                        # Check if user has direct search criteria (doctor name, clinic name, etc.)
+                                        direct_search_criteria = detect_direct_search_criteria(user_message)
+                                        logger.info(f"🔍 Direct search criteria detected: {direct_search_criteria}")
+                                        
+                                        # If direct search criteria found, prioritize them over detected specialties
+                                        if direct_search_criteria:
+                                            logger.info(f"🔍 Direct search criteria found - prioritizing user's specific request")
+                                            
+                                            # Add direct search criteria to search parameters
+                                            if direct_search_criteria.get("doctor_name"):
+                                                search_criteria["doctor_name"] = direct_search_criteria["doctor_name"]
+                                                logger.info(f"🔍 Added doctor name: {direct_search_criteria['doctor_name']}")
+                                            
+                                            if direct_search_criteria.get("clinic_name"):
+                                                search_criteria["clinic_name"] = direct_search_criteria["clinic_name"]
+                                                logger.info(f"🔍 Added clinic name: {direct_search_criteria['clinic_name']}")
+                                            
+                                            if direct_search_criteria.get("hospital_name"):
+                                                search_criteria["hospital_name"] = direct_search_criteria["hospital_name"]
+                                                logger.info(f"🔍 Added hospital name: {direct_search_criteria['hospital_name']}")
+                                            
+                                            # Only add specialties if no direct criteria found
+                                            logger.info(f"🔍 Direct criteria prioritized - specialties will be used as secondary filters")
+                                        else:
+                                            logger.info(f"🔍 No direct search criteria - using detected specialties as primary filters")
+                                            
+                                            # Include detected specialties if available
+                                            if patient_data and patient_data.get("detected_specialties"):
+                                                detected_specialties = patient_data["detected_specialties"]
+                                                logger.info(f"🔍 Found detected specialties: {detected_specialties}")
+                                                
+                                                # Extract specialty and subspecialty information
+                                                if detected_specialties:
+                                                    # Get the highest confidence specialty
+                                                    top_specialty = max(detected_specialties, key=lambda x: x.get('confidence', 0))
+                                                    specialty = top_specialty.get('specialty', '')
+                                                    subspecialty = top_specialty.get('subspecialty', '')
+                                                    
+                                                    # Add specialty information to search criteria
+                                                    # Note: symptom analysis returns 'specialty'/'subspecialty' but search expects 'speciality'/'subspeciality'
+                                                    if specialty:
+                                                        search_criteria["speciality"] = specialty
+                                                        logger.info(f"🔍 Added specialty to search: {specialty}")
+                                                    if subspecialty:
+                                                        search_criteria["subspecialty"] = subspecialty
+                                                        logger.info(f"🔍 Added subspecialty to search: {subspecialty}")
+                                                    
+                                                    logger.info(f"🔍 Specialties added as primary filters: {search_criteria}")
+                                            else:
+                                                logger.info(f"ℹ️ No detected specialties found in patient data")
 
                                         logger.info(f"🔍 Final search criteria: {search_criteria}")
+                                        logger.info(f"🔍 Message being sent to search: '{search_criteria['user_message']}'")
+                                        logger.info(f"🔍 Direct search parameters: doctor_name={search_criteria.get('doctor_name')}, clinic_name={search_criteria.get('clinic_name')}, hospital_name={search_criteria.get('hospital_name')}")
+                                        logger.info(f"🔍 Specialty parameters: speciality={search_criteria.get('speciality')}, subspecialty={search_criteria.get('subspecialty')}")
 
                                         # Call the doctor search function
                                         search_result = dynamic_doctor_search(
@@ -1860,10 +2088,10 @@ class SimpleMedicalAgent:
     ❌ **WRONG**: "I will search for dentists. [Tool: search_doctors_dynamic...]"
 
 🚫 **CRITICAL TOOL USAGE RULES:**
-- **NEVER call `analyze_symptoms` if specialties are already detected in patient data**
+- **NEVER call `analyze_symptoms` if EXACT SAME symptoms already analyzed**
 - **NEVER call `store_patient_details` if patient information is already complete**
-- **Use existing detected specialties for doctor searches when available**
-- **Only call tools when absolutely necessary for new information**
+- **Use existing detected specialties for doctor searches when appropriate**
+- **Call `analyze_symptoms` for NEW or DIFFERENT symptoms (even if specialties exist)**
 
 🚫 **CRITICAL RESPONSE RULES:**
 - **NEVER mention tools, APIs, or system internals in your response**
@@ -1885,7 +2113,7 @@ class SimpleMedicalAgent:
 5. **New Health Issue** → `analyze_symptoms` (replaces previous)
 
 **NEVER DO:**
-- ❌ Call `analyze_symptoms` when specialties already detected
+- ❌ Call `analyze_symptoms` when EXACT SAME symptoms already analyzed
 - ❌ Call `store_patient_details` when patient info complete
 - ❌ Call `search_doctors_dynamic` without specialties (unless direct search)
 
