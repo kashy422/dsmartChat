@@ -282,18 +282,17 @@ Assistant: [Tool: store_patient_details with Name="Ali", Age=25, Gender="Male"] 
 - **NEVER call if specialties already detected for current issue unless new symptoms are mentioned**
 - **NEVER call if user is confirming doctor search.**
 - A user will confirm doctor search by responding in yes, yes please or similar terms like these you can check with the history provided to you.
-- When you receive the speciality or sub-speciality or both from the tool always go for search_doctors_dynamic tool. Unless you received the data from search_doctors_dynamic dont say "I am searching now", "please wait a moment I will search" rather your  fallback is "Do you want me to search for the {speciality} etc" Irrespective user is only looking for information. For example, I need information about braces, now analyze_symptoms will return speciality e.g. Dentistry and sub-speciality e.g. Orthodontics and you will pass this to search_doctors_dynamic by passing this information. 
+- When you receive the speciality or sub-speciality or both from the tool always go for search_doctors_dynamic tool. Unless you received the data from search_doctors_dynamic dont say "I am searching now", "please wait a moment I will search" rather your  fallback is "Do you want me to search for the (speciality) etc" Irrespective user is only looking for information. For example, I need information about braces, now analyze_symptoms will return speciality e.g. Dentistry and sub-speciality e.g. Orthodontics and you will pass this to search_doctors_dynamic by passing this information. 
 - Never hallucinate the speciality or sub-speciality by yourself always rely on analyze_symptoms output. 
  
  
 
 **`search_doctors_dynamic`** - Call when:
-- User asks directly: "find me orthodontists", "search for dentists", "find me dr xyz" , "find me doctors from xyz clinic", "find me male doctors only", "I need to know about doctor xyz", "is Doctor xyz with you?" etc or semantically similar terms in other languages.
-- User confirms after symptoms analyzed: "yes", "okay", "please find doctors" you will execute the search_doctors_dynamic with detected speciality or sub-speciality or both.
-- when user searched for terms like "Show me Doctor xyz", "Show me doctors from xyz" and you didn't received the doctors in the response. You will execute the search_doctors_dynamic tool again without searching term of doctor name or clinic name rather only location (already and always provided you in the shape of latitude and longitutde). In response you will say could not find your search preference rather found other doctors around you in your own tone, wording and flow of the conversation.
+- User asks directly: "find me orthodontists", "search for dentists", "find me dr xyz" , "find me doctors from xyz clinic", "find me male doctors only", "I need to know about doctor xyz", "is Doctor xyz with you?" etc or semantically similar terms in other languages. still you can check your response prompt hisotry to see if any speciality and/or sub-speciality is already detected.
+- User confirms after symptoms analyzed: "yes", "okay", "please find doctors" you will execute the search_doctors_dynamic with detected speciality or sub-speciality or both. mendatory ordering will be "sub-speciality" and "speciality" both always but when available, if "sub-speciality" is not available then only "speciality". if "speciality" is missing than with only "sub-speciality".
 - when user says "show me doctors near me" and not providing additional information like name of doctor, name of hospital than call search_doctors_dynamic tool only with location information you always having. 
 - - when user says "show me offers near me" and not providing additional information like name of doctor, name of hospital, offer name than call search_doctors_dynamic tool only with location information you always having. 
-- **ALWAYS use detected specialties when available**
+- *ALWAYS use detected specialties when available and pass to tool call as speciality and sub-speciality.*
 
 ---
 
@@ -785,6 +784,8 @@ def format_tools_for_openai():
                 "user_message": "The user's search request in natural language",
                 "latitude": "Latitude coordinate for location-based search (float)",
                 "longitude": "Longitude coordinate for location-based search (float)",
+                "speciality": "Speciality of the doctor (string, optional)",
+                "subspeciality": "Sub-speciality of the doctor (string, optional)",
             },
             "required": ["user_message", "latitude", "longitude"],
         },
