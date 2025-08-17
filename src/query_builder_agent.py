@@ -323,31 +323,48 @@ def extract_processed_criteria(search_criteria: Union[dict, str]) -> Dict[str, A
             user_message = search_criteria["user_message"]
             logger.info(f"EXTRACTING CRITERIA: Found user_message in criteria: '{user_message}'")
             
-            # Extract search criteria from the user message
+            # ALWAYS extract from user message first to get ALL filters (rating, price, experience, doctor name, etc.)
+            logger.info(f"EXTRACTING CRITERIA: Always extracting from user message to get all filters")
             extracted_criteria = extract_search_criteria_from_message(user_message)
             logger.info(f"EXTRACTING CRITERIA: Extracted search criteria: {extracted_criteria}")
             
-            # Check if we extracted both specialty and subspecialty
-            if "speciality" in extracted_criteria and "subspeciality" in extracted_criteria:
-                search_params["speciality"] = extracted_criteria["speciality"]
-                search_params["subspeciality"] = extracted_criteria["subspeciality"]
-                logger.info(f"EXTRACTING CRITERIA: Using both extracted specialty '{extracted_criteria['speciality']}' and subspecialty '{extracted_criteria['subspeciality']}'")
-            
-            # If we only got specialty but not subspecialty
-            elif "speciality" in extracted_criteria:
-                search_params["speciality"] = extracted_criteria["speciality"]
-                # Keep any existing subspecialty from the original criteria
-                if "subspeciality" in search_criteria:
-                    search_params["subspeciality"] = search_criteria["subspeciality"]
-            
-            # If we only got subspecialty but not specialty
-            elif "subspeciality" in extracted_criteria:
-                search_params["subspeciality"] = extracted_criteria["subspeciality"]
-                # Keep any existing specialty from the original criteria
-                if "speciality" in search_criteria:
-                    search_params["speciality"] = search_criteria["speciality"]
-                else:
-                    # Default to dentistry for dental subspecialties
+            # Apply specialty priority logic AFTER extraction
+            if "speciality" in search_criteria and search_criteria["speciality"] and "subspeciality" in search_criteria and search_criteria["subspeciality"]:
+                # Priority 1: Use provided specialties from tool parameters (override extracted ones)
+                search_params["speciality"] = search_criteria["speciality"]
+                search_params["subspeciality"] = search_criteria["subspeciality"]
+                logger.info(f"EXTRACTING CRITERIA: Using provided specialties - speciality: '{search_criteria['speciality']}', subspeciality: '{search_criteria['subspeciality']}' (overriding extracted)")
+                
+            elif "speciality" in search_criteria and search_criteria["speciality"]:
+                # Priority 2: Use provided specialty, use extracted subspecialty if available
+                search_params["speciality"] = search_criteria["speciality"]
+                logger.info(f"EXTRACTING CRITERIA: Using provided specialty '{search_criteria['speciality']}'")
+                
+                if "subspeciality" in extracted_criteria and extracted_criteria["subspeciality"]:
+                    search_params["subspeciality"] = extracted_criteria["subspeciality"]
+                    logger.info(f"EXTRACTING CRITERIA: Using extracted subspecialty '{extracted_criteria['subspeciality']}' from message")
+                
+            elif "subspeciality" in search_criteria and search_criteria["subspeciality"]:
+                # Priority 3: Use provided subspecialty, use extracted specialty if available
+                search_params["subspeciality"] = search_criteria["subspeciality"]
+                logger.info(f"EXTRACTING CRITERIA: Using provided subspecialty '{search_criteria['subspeciality']}'")
+                
+                if "speciality" in extracted_criteria and extracted_criteria["speciality"]:
+                    search_params["speciality"] = extracted_criteria["speciality"]
+                    logger.info(f"EXTRACTING CRITERIA: Using extracted specialty '{extracted_criteria['speciality']}' from message")
+                
+            else:
+                # Priority 4: No specialties provided in params, use extracted ones
+                if "speciality" in extracted_criteria and extracted_criteria["speciality"]:
+                    search_params["speciality"] = extracted_criteria["speciality"]
+                    logger.info(f"EXTRACTING CRITERIA: Using extracted specialty '{extracted_criteria['speciality']}' from message")
+                
+                if "subspeciality" in extracted_criteria and extracted_criteria["subspeciality"]:
+                    search_params["subspeciality"] = extracted_criteria["subspeciality"]
+                    logger.info(f"EXTRACTING CRITERIA: Using extracted subspecialty '{extracted_criteria['subspeciality']}' from message")
+                
+                # Handle dental subspecialty without specialty case
+                elif "subspeciality" in extracted_criteria and "speciality" not in extracted_criteria:
                     dental_subspecialties = ["Orthodontics", "Endodontics", "Periodontics", "Dental Implants", 
                                           "Prosthodontics", "Oral Surgery", "Oral and Maxillofacial Surgery",
                                           "Pediatric Dentistry", "GP", "Dental Hygienist"]
@@ -355,18 +372,21 @@ def extract_processed_criteria(search_criteria: Union[dict, str]) -> Dict[str, A
                         search_params["speciality"] = "dentist"
                         logger.info(f"EXTRACTING CRITERIA: Added default specialty 'dentist' for dental subspecialty '{extracted_criteria['subspeciality']}'")
             
-            # Copy over all other extracted criteria
+            # ALWAYS copy over ALL other extracted criteria (rating, price, experience, doctor name, clinic name, etc.)
             for key, value in extracted_criteria.items():
-                if key not in ["speciality", "subspeciality"]:  # We already handled these
+                if key not in ["speciality", "subspeciality"]:  # We already handled specialties above
                     search_params[key] = value
+                    logger.info(f"EXTRACTING CRITERIA: Added extracted criteria '{key}': '{value}'")
             
-            # Preserve any additional parameters from original criteria
+            # Copy over any additional parameters from original criteria (coordinates, etc.)
             for key, value in search_criteria.items():
                 if key != "user_message" and key not in search_params:
                     search_params[key] = value
+                    logger.info(f"EXTRACTING CRITERIA: Added original criteria '{key}': '{value}'")
                     
-            # Check if we have symptom analysis data that should override or supplement
-            if hasattr(thread_local, 'symptom_analysis'):
+            # Check if we have symptom analysis data that should supplement (NOT override) search criteria
+            # Only use symptom analysis if we don't already have specialties from tool parameters
+            if hasattr(thread_local, 'symptom_analysis') and ("speciality" not in search_params or "subspecialty" not in search_params):
                 symptom_data = thread_local.symptom_analysis
                 logger.info(f"EXTRACTING CRITERIA: Found symptom analysis data to supplement search criteria")
                 
@@ -395,19 +415,19 @@ def extract_processed_criteria(search_criteria: Union[dict, str]) -> Dict[str, A
                     top_specialty = specialties[0]
                     logger.info(f"EXTRACTING CRITERIA: Using top specialty from symptom analysis: {top_specialty}")
                     
-                    # Add specialty if we don't already have one or override lower confidence specialty
+                    # Add specialty ONLY if we don't already have one (no overriding)
                     if "speciality" not in search_params and ("specialty" in top_specialty or "name" in top_specialty):
                         specialty_name = top_specialty.get("specialty") or top_specialty.get("name")
                         if specialty_name:
                             search_params["speciality"] = specialty_name
-                            logger.info(f"EXTRACTING CRITERIA: Added specialty '{specialty_name}' from symptom analysis")
+                            logger.info(f"EXTRACTING CRITERIA: Added missing specialty '{specialty_name}' from symptom analysis")
                     
-                    # Add subspecialty if we don't already have one or override lower confidence subspecialty
-                    if "subspeciality" not in search_params and "subspecialty" in top_specialty:
+                    # Add subspecialty ONLY if we don't already have one (no overriding)
+                    if "subspecialty" not in search_params and "subspecialty" in top_specialty:
                         subspecialty_name = top_specialty.get("subspecialty")
                         if subspecialty_name:
-                            search_params["subspeciality"] = subspecialty_name
-                            logger.info(f"EXTRACTING CRITERIA: Added subspecialty '{subspecialty_name}' from symptom analysis")
+                            search_params["subspecialty"] = subspecialty_name
+                            logger.info(f"EXTRACTING CRITERIA: Added missing subspecialty '{subspecialty_name}' from symptom analysis")
         else:
             # Use the dictionary as-is
             search_params = search_criteria
@@ -486,36 +506,49 @@ def unified_doctor_search(search_criteria: Union[dict, str]) -> dict:
             user_message = search_criteria["user_message"]
             logger.info(f"Found user_message in criteria: '{user_message}'")
             
-            # Extract search criteria from the user message
-            print("\n" + "="*50)
-            print("DEBUG: About to call extract_search_criteria_from_message")
-            print("DEBUG: Input message:", user_message)
-            print("="*50 + "\n")
-            
+            # ALWAYS extract from user message first to get ALL filters (rating, price, experience, doctor name, etc.)
+            logger.info(f"Always extracting from user message to get all filters")
             extracted_criteria = extract_search_criteria_from_message(user_message)
             logger.info(f"Extracted search criteria: {extracted_criteria}")
             
-            # Check if we extracted both specialty and subspecialty
-            if "speciality" in extracted_criteria and "subspeciality" in extracted_criteria:
-                search_params["speciality"] = extracted_criteria["speciality"]
-                search_params["subspeciality"] = extracted_criteria["subspeciality"]
-                logger.info(f"Using both extracted specialty '{extracted_criteria['speciality']}' and subspecialty '{extracted_criteria['subspeciality']}'")
-            
-            # If we only got specialty but not subspecialty
-            elif "speciality" in extracted_criteria:
-                search_params["speciality"] = extracted_criteria["speciality"]
-                # Keep any existing subspecialty from the original criteria
-                if "subspeciality" in search_criteria:
-                    search_params["subspeciality"] = search_criteria["subspeciality"]
-            
-            # If we only got subspecialty but not specialty
-            elif "subspeciality" in extracted_criteria:
-                search_params["subspeciality"] = extracted_criteria["subspeciality"]
-                # Keep any existing specialty from the original criteria
-                if "speciality" in search_criteria:
-                    search_params["speciality"] = search_criteria["speciality"]
-                else:
-                    # Default to dentistry for dental subspecialties
+            # Apply specialty priority logic AFTER extraction
+            if "speciality" in search_criteria and search_criteria["speciality"] and "subspeciality" in search_criteria and search_criteria["subspeciality"]:
+                # Priority 1: Use provided specialties from tool parameters (override extracted ones)
+                search_params["speciality"] = search_criteria["speciality"]
+                search_params["subspeciality"] = search_criteria["subspeciality"]
+                logger.info(f"Using provided specialties - speciality: '{search_criteria['speciality']}', subspeciality: '{search_criteria['subspeciality']}' (overriding extracted)")
+                        
+            elif "speciality" in search_criteria and search_criteria["speciality"]:
+                # Priority 2: Use provided specialty, use extracted subspecialty if available
+                search_params["speciality"] = search_criteria["speciality"]
+                logger.info(f"Using provided specialty '{search_criteria['speciality']}'")
+                
+                if "subspeciality" in extracted_criteria and extracted_criteria["subspeciality"]:
+                    search_params["subspeciality"] = extracted_criteria["subspeciality"]
+                    logger.info(f"Using extracted subspecialty '{extracted_criteria['subspeciality']}' from message")
+                        
+            elif "subspeciality" in search_criteria and search_criteria["subspeciality"]:
+                # Priority 3: Use provided subspecialty, use extracted specialty if available
+                search_params["subspeciality"] = search_criteria["subspeciality"]
+                logger.info(f"Using provided subspecialty '{search_criteria['subspeciality']}'")
+                
+                if "speciality" in extracted_criteria and extracted_criteria["speciality"]:
+                    search_params["speciality"] = extracted_criteria["speciality"]
+                    logger.info(f"Using extracted specialty '{extracted_criteria['speciality']}' from message")
+                        
+            else:
+                # Priority 4: No specialties provided in params, use extracted ones
+                
+                if "speciality" in extracted_criteria and extracted_criteria["speciality"]:
+                    search_params["speciality"] = extracted_criteria["speciality"]
+                    logger.info(f"Using extracted specialty '{extracted_criteria['speciality']}' from message")
+                
+                if "subspeciality" in extracted_criteria and extracted_criteria["subspeciality"]:
+                    search_params["subspeciality"] = extracted_criteria["subspeciality"]
+                    logger.info(f"Using extracted subspecialty '{extracted_criteria['subspeciality']}' from message")
+                
+                # Handle dental subspecialty without specialty case
+                elif "subspeciality" in extracted_criteria and "speciality" not in extracted_criteria:
                     dental_subspecialties = ["Orthodontics", "Endodontics", "Periodontics", "Dental Implants", 
                                           "Prosthodontics", "Oral Surgery", "Oral and Maxillofacial Surgery",
                                           "Pediatric Dentistry", "GP", "Dental Hygienist"]
@@ -523,20 +556,33 @@ def unified_doctor_search(search_criteria: Union[dict, str]) -> dict:
                         search_params["speciality"] = "dentist"
                         logger.info(f"Added default specialty 'dentist' for dental subspecialty '{extracted_criteria['subspeciality']}'")
             
-            # Copy over all other extracted criteria
+            # ALWAYS copy over ALL other extracted criteria (rating, price, experience, doctor name, clinic name, etc.)
             for key, value in extracted_criteria.items():
-                if key not in ["speciality", "subspeciality"]:  # We already handled these
+                if key not in ["speciality", "subspeciality"]:  # We already handled specialties above
                     search_params[key] = value
+                    logger.info(f"Added extracted criteria '{key}': '{value}'")
             
-            # Preserve any additional parameters from original criteria
+            # Copy over any additional parameters from original criteria (coordinates, etc.)
             for key, value in search_criteria.items():
                 if key != "user_message" and key not in search_params:
                     search_params[key] = value
+                    logger.info(f"Added original criteria '{key}': '{value}'")
+                
+                # Copy over all other extracted criteria
+                for key, value in extracted_criteria.items():
+                    if key not in ["speciality", "subspecialty"]:  # We already handled these
+                        search_params[key] = value
+                
+                # Preserve any additional parameters from original criteria
+                for key, value in search_criteria.items():
+                    if key != "user_message" and key not in search_params:
+                        search_params[key] = value
                     
-            # Check if we have symptom analysis data that should override or supplement
-            if hasattr(thread_local, 'symptom_analysis'):
+            # Check if we have symptom analysis data that should supplement (NOT override) search criteria
+            # Only use symptom analysis if we don't already have specialties from tool parameters
+            if hasattr(thread_local, 'symptom_analysis') and ("speciality" not in search_params or "subspecialty" not in search_params):
                 symptom_data = thread_local.symptom_analysis
-                logger.info(f"Found symptom analysis data to supplement search criteria")
+                logger.info(f"Found symptom analysis data to supplement missing specialties")
                 
                 # Extract specialties from symptom analysis
                 specialties = []
@@ -563,19 +609,19 @@ def unified_doctor_search(search_criteria: Union[dict, str]) -> dict:
                     top_specialty = specialties[0]
                     logger.info(f"Using top specialty from symptom analysis: {top_specialty}")
                     
-                    # Add specialty if we don't already have one or override lower confidence specialty
+                    # Add specialty ONLY if we don't already have one (no overriding)
                     if "speciality" not in search_params and ("specialty" in top_specialty or "name" in top_specialty):
                         specialty_name = top_specialty.get("specialty") or top_specialty.get("name")
                         if specialty_name:
                             search_params["speciality"] = specialty_name
-                            logger.info(f"Added specialty '{specialty_name}' from symptom analysis")
+                            logger.info(f"Added missing specialty '{specialty_name}' from symptom analysis")
                     
-                    # Add subspecialty if we don't already have one or override lower confidence subspecialty
-                    if "subspeciality" not in search_params and "subspecialty" in top_specialty:
+                    # Add subspecialty ONLY if we don't already have one (no overriding)
+                    if "subspecialty" not in search_params and "subspecialty" in top_specialty:
                         subspecialty_name = top_specialty.get("subspecialty")
                         if subspecialty_name:
-                            search_params["subspeciality"] = subspecialty_name
-                            logger.info(f"Added subspecialty '{subspecialty_name}' from symptom analysis")
+                            search_params["subspecialty"] = subspecialty_name
+                            logger.info(f"Added missing subspecialty '{subspecialty_name}' from symptom analysis")
         else:
             # Use the dictionary as-is
             search_params = search_criteria
